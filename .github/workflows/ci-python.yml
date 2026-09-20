@@ -78,6 +78,12 @@ on:
         description: 'none | critical | high | medium | low'
         type: string
         default: 'high'
+      publish-findings:
+        description: >
+          Publica os achados no code scanning. Desligue para receber apenas artifact e job
+          summary — útil durante a calibração, para não ter check vermelho no PR.
+        type: boolean
+        default: true
       security-mode:
         description: 'observe (só reporta) | enforce (reprova o job).'
         type: string
@@ -317,6 +323,7 @@ jobs:
           sarif-file: container.sarif
           category: container
           tool-name: 'Trivy (imagem e configuração)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
 
@@ -369,6 +376,7 @@ jobs:
           sarif-file: sast.sarif
           category: sast
           tool-name: 'SAST (Semgrep)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
 
@@ -383,6 +391,7 @@ jobs:
           sarif-file: gitleaks.sarif
           category: secrets
           tool-name: 'Segredos (gitleaks)'
+          publish: ${{ inputs.publish-findings }}
           # Segredo vazado não admite modo observação: é sempre bloqueante.
           severity-fail-on: low
           mode: enforce
@@ -398,6 +407,7 @@ jobs:
           sarif-file: dependencies.sarif
           category: dependencies
           tool-name: 'Dependências (Trivy)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
 
@@ -444,6 +454,7 @@ jobs:
           sarif-file: dast.sarif
           category: dast
           tool-name: 'DAST (OWASP ZAP)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
 

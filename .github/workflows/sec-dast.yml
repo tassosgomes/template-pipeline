@@ -50,6 +50,10 @@ on:
       security-fail-on:
         type: string
         default: 'high'
+      publish-findings:
+        description: 'Publica os achados no code scanning.'
+        type: boolean
+        default: true
       security-mode:
         type: string
         default: 'observe'
@@ -110,5 +114,6 @@ jobs:
           sarif-file: dast.sarif
           category: dast
           tool-name: 'DAST · OWASP ZAP (${{ inputs.scan-type }})'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}

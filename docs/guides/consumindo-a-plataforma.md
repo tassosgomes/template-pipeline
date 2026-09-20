@@ -83,6 +83,7 @@ with: { version: '22', coverage-threshold: 70 }
 | `run-dependency-scan` | boolean | `true` | |
 | `security-fail-on` | string | `high` | `none` \| `critical` \| `high` \| `medium` \| `low` |
 | `security-mode` | string | `observe` | `observe` (só reporta) \| `enforce` (reprova) |
+| `publish-findings` | boolean | `true` | Publica os achados no code scanning. `false` entrega só artifact + job summary |
 | `run-dast` | boolean | `false` | DAST efêmero no PR. Exige `build-container: true` |
 | `dast-port` | number | `8080` | |
 | `dast-health-path` | string | `/health` | |

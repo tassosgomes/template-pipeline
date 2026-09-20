@@ -75,12 +75,13 @@ do self-test só valida que *alguma* coisa é detectada, não a sua regra espec�
 **Segredo vazado é a única exceção**: roda sempre em `enforce`, com corte em `low`. Não há modo
 observação para credencial no repositório — quando ela vaza, já vazou.
 
-## Os dois controles do gate
+## Os controles
 
 ```yaml
 with:
-  security-mode: observe   # observe | enforce
-  security-fail-on: high   # none | critical | high | medium | low
+  security-mode: observe    # observe | enforce
+  security-fail-on: high    # none | critical | high | medium | low
+  publish-findings: true    # publica no code scanning
 ```
 
 - `security-mode: observe` — reporta tudo no job summary e na aba Security, **nunca reprova**.
@@ -134,7 +135,24 @@ Depende do plano e da visibilidade do repositório:
 | Privado **com** licença GitHub Code Security | Aba **Security → Code scanning** |
 | Privado no plano **Free** | **Artifact SARIF + tabela no job summary** |
 
-O terceiro caso é o esperado hoje, **não é falha**. O composite `upload-findings` tenta publicar
+### O check do code scanning é separado do nosso gate
+
+Atenção a uma distinção que surpreende: `security-mode: observe` controla **o nosso gate**, mas
+publicar um SARIF faz o **próprio code scanning** criar um check no PR, que fica vermelho quando
+a análise introduz alertas novos. Ou seja, em modo observação o build não reprova, mas o PR pode
+mostrar um check vermelho vindo do code scanning — não do pipeline.
+
+Durante a calibração, se isso incomodar, use `publish-findings: false`: os achados vão para
+artifact e job summary, o gate continua sendo aplicado, e nenhum check é criado. Ligue de volta
+quando a baseline estiver limpa.
+
+É exatamente por isso que o self-test da plataforma roda com `publish-findings: false`: os
+fixtures têm vulnerabilidades plantadas e permanentes, e publicá-las encheria a aba Security da
+plataforma de alerta intencional, escondendo achado real.
+
+### Onde os achados aparecem quando publicados
+
+O terceiro caso abaixo é o esperado hoje, **não é falha**. O composite `upload-findings` tenta publicar
 no code scanning e, quando o repositório não o tem, degrada automaticamente. O gate de severidade
 é aplicado igual nos três cenários. Quando a empresa migrar de plano, os achados passam a aparecer
 na aba Security **sem mudar uma linha do YAML do serviço**.

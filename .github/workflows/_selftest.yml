@@ -79,6 +79,7 @@ jobs:
           sarif-file: sast.sarif
           category: selftest-observe
           tool-name: 'Self-test · modo observação'
+          publish: false
           severity-fail-on: low
           mode: observe
 
@@ -90,6 +91,7 @@ jobs:
           sarif-file: sast.sarif
           category: selftest-enforce
           tool-name: 'Self-test · modo enforce'
+          publish: false
           severity-fail-on: low
           mode: enforce
 
@@ -127,6 +129,10 @@ jobs:
       version: '8.0.x'
       platform-ref: ${{ github.sha }}
       security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
 
   ci-java:
     name: Pipeline · java
@@ -140,6 +146,10 @@ jobs:
       version: '21'
       platform-ref: ${{ github.sha }}
       security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
 
   ci-go:
     name: Pipeline · go
@@ -153,6 +163,10 @@ jobs:
       version: '1.23'
       platform-ref: ${{ github.sha }}
       security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
 
   ci-node:
     name: Pipeline · node
@@ -166,6 +180,10 @@ jobs:
       version: '22'
       platform-ref: ${{ github.sha }}
       security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
 
   ci-python:
     name: Pipeline · python
@@ -181,6 +199,7 @@ jobs:
       # O fixture python tem cobertura real de 100%; o gate precisa passar.
       coverage-threshold: 90
       security-mode: observe
+      publish-findings: false
 
   ci-react-ts:
     name: Pipeline · react-ts
@@ -194,6 +213,10 @@ jobs:
       version: '22'
       platform-ref: ${{ github.sha }}
       security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
 
   # ===========================================================================
   # O DAST é a única camada que precisa de aplicação de pé, então ela não é
@@ -232,6 +255,7 @@ jobs:
           sarif-file: dast.sarif
           category: selftest-dast
           tool-name: 'Self-test · DAST'
+          publish: false
           severity-fail-on: none
           mode: observe
 

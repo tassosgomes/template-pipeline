@@ -37,6 +37,10 @@ on:
       security-fail-on:
         type: string
         default: 'high'
+      publish-findings:
+        description: 'Publica os achados no code scanning.'
+        type: boolean
+        default: true
       security-mode:
         type: string
         default: 'observe'
@@ -85,6 +89,7 @@ jobs:
           sarif-file: sast.sarif
           category: sast
           tool-name: 'SAST (Semgrep)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
 
@@ -99,6 +104,7 @@ jobs:
           sarif-file: gitleaks.sarif
           category: secrets
           tool-name: 'Segredos (gitleaks)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: low
           mode: enforce
 
@@ -113,5 +119,6 @@ jobs:
           sarif-file: dependencies.sarif
           category: dependencies
           tool-name: 'Dependências (Trivy)'
+          publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
