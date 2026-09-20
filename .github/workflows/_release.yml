@@ -72,11 +72,32 @@ jobs:
           SHA: ${{ steps.tag.outputs.sha }}
         run: |
           set -euo pipefail
-          concl=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/_selftest.yml/runs?head_sha=${SHA}&status=completed" \
-                    --jq '[.workflow_runs[].conclusion] | first // "ausente"')
+          # Empurrar a tag logo após o merge é o fluxo normal, e nesse momento o
+          # self-test da main quase sempre ainda está rodando. Por isso esperamos a
+          # conclusão em vez de exigir que ela já exista.
+          limite=$(( SECONDS + 1800 ))
+          while :; do
+            resp=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/_selftest.yml/runs?head_sha=${SHA}" \
+                     --jq '[.workflow_runs[]] | sort_by(.created_at) | last | {status, conclusion} | @json' 2>/dev/null || echo '')
+
+            status=$(echo "$resp" | jq -r '.status // "ausente"' 2>/dev/null || echo ausente)
+            concl=$(echo  "$resp" | jq -r '.conclusion // ""'     2>/dev/null || echo "")
+
+            if [ "$status" = "completed" ]; then
+              break
+            fi
+
+            if [ "$SECONDS" -ge "$limite" ]; then
+              echo "::error title=Self-test não concluiu::Após 30 min, a execução do self-test em ${SHA} ainda está '${status}'. Publicação abortada."
+              exit 1
+            fi
+
+            echo "self-test em '${status}'; aguardando..."
+            sleep 20
+          done
 
           if [ "$concl" != "success" ]; then
-            echo "::error title=Self-test não está verde::A execução do self-test em ${SHA} terminou como '${concl}'. Corrija antes de publicar."
+            echo "::error title=Self-test não está verde::A execução do self-test em ${SHA} terminou como '${concl:-ausente}'. Corrija antes de publicar."
             exit 1
           fi
           echo "✅ self-test verde em ${SHA}"

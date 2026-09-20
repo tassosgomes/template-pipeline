@@ -23,8 +23,7 @@ jobs:
     uses: tassosgomes/template-pipeline/.github/workflows/ci-node.yml@v1
     permissions:
       contents: read
-      packages: write        # só se build-container: true
-      security-events: write # publica os achados na aba Security
+      security-events: write   # ver a matriz de permissões abaixo
     with:
       version: '22'
       coverage-threshold: 70
@@ -32,6 +31,34 @@ jobs:
 
 Troque `ci-node.yml` pelo arquivo da sua stack. **O contrato é idêntico nos seis** (ADR 0002):
 os mesmos inputs, os mesmos outputs, os mesmos defaults.
+
+## Permissões: conceda o que você usa
+
+Os workflows da plataforma **não declaram permissões** — cada job recebe exatamente o que o
+seu job chamador conceder. Isso é deliberado: em workflow reusável, o que é declarado vira
+*exigência* sobre quem chama, e pedir mais do que o chamador concedeu **faz o run falhar na
+largada**, sem criar job algum e sem log útil.
+
+| Permissão | Quando é necessária |
+|---|---|
+| `contents: read` | sempre |
+| `security-events: write` | quando `publish-findings: true` (o default) |
+| `packages: write` | quando `build-container: true` |
+| `packages: read` | quando `run-dast: true` |
+
+Mínimo absoluto, para um repositório que só quer build e testes:
+
+```yaml
+    permissions:
+      contents: read
+    with:
+      publish-findings: false
+```
+
+### Se o run falhar instantaneamente, sem nenhum job
+
+É quase sempre permissão. A mensagem do GitHub é pouco específica, e o run aparece como
+`startup_failure` com zero jobs. Confira a matriz acima antes de procurar qualquer outra causa.
 
 ## Um exemplo por stack
 

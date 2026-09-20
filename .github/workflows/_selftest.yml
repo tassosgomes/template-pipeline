@@ -120,10 +120,10 @@ jobs:
   ci-dotnet:
     name: Pipeline · dotnet
     uses: ./.github/workflows/ci-dotnet.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/dotnet
       version: '8.0.x'
@@ -137,10 +137,10 @@ jobs:
   ci-java:
     name: Pipeline · java
     uses: ./.github/workflows/ci-java.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/java
       version: '21'
@@ -154,10 +154,10 @@ jobs:
   ci-go:
     name: Pipeline · go
     uses: ./.github/workflows/ci-go.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/go
       version: '1.23'
@@ -171,10 +171,10 @@ jobs:
   ci-node:
     name: Pipeline · node
     uses: ./.github/workflows/ci-node.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/node
       version: '22'
@@ -188,10 +188,10 @@ jobs:
   ci-python:
     name: Pipeline · python
     uses: ./.github/workflows/ci-python.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/python
       version: '3.12'
@@ -204,10 +204,10 @@ jobs:
   ci-react-ts:
     name: Pipeline · react-ts
     uses: ./.github/workflows/ci-react-ts.yml
+    # Concedemos o mínimo de propósito: se alguém voltar a declarar `permissions`
+    # dentro de um ci-*.yml, o run falha na largada e a regressão aparece aqui.
     permissions:
       contents: read
-      packages: write
-      security-events: write
     with:
       working-directory: examples/react-ts
       version: '22'
