@@ -196,9 +196,77 @@ jobs:
       security-mode: observe
 
   # ===========================================================================
+  # O DAST é a única camada que precisa de aplicação de pé, então ela não é
+  # exercitada pelos jobs de pipeline (que rodam sem container). Este job sobe a
+  # imagem do fixture e percorre a cadeia inteira: ephemeral-app -> ZAP -> SARIF -> gate.
+  dast-efemero:
+    name: DAST efêmero sobe o alvo e reporta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Construída localmente, sem publicar: o self-test não deve criar pacotes no GHCR.
+      - name: Construir a imagem do fixture
+        shell: bash
+        run: docker build -t dast-fixture:selftest examples/node
+
+      - id: target
+        uses: ./actions/ephemeral-app
+        with:
+          image-ref: dast-fixture:selftest
+          port: 8080
+          health-path: /health
+          container-name: dast-selftest
+
+      - uses: ./actions/dast-zap
+        with:
+          target-url: ${{ steps.target.outputs.base-url }}
+          scan-type: baseline
+
+      - id: findings
+        uses: ./actions/upload-findings
+        with:
+          sarif-file: dast.sarif
+          category: selftest-dast
+          tool-name: 'Self-test · DAST'
+          severity-fail-on: none
+          mode: observe
+
+      - name: O ZAP precisa ter reportado ao menos um achado
+        shell: bash
+        env:
+          TOTAL: ${{ steps.findings.outputs.total }}
+        run: |
+          set -euo pipefail
+          echo "Achados do ZAP: ${TOTAL:-0}"
+          if [ "${TOTAL:-0}" -eq 0 ]; then
+            echo "::error title=DAST não reportou nada::O fixture serve uma página sem CSP nem X-Content-Type-Options; o ZAP baseline deveria reportar isso. Zero achados significa que o scan não alcançou o alvo ou que a conversão para SARIF quebrou."
+            exit 1
+          fi
+
+      - name: Derrubar o alvo
+        if: always()
+        shell: bash
+        run: docker rm -f dast-selftest || true
+
+      - name: O container não pode sobreviver ao job
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$(docker ps -aq -f name='^dast-selftest$')" ]; then
+            echo "::error title=Container vazou::'dast-selftest' continua existindo após a limpeza."
+            exit 1
+          fi
+          echo "✅ alvo derrubado"
+
+  # ===========================================================================
   resultado:
     name: Resultado do self-test
-    needs: [estatico, sast-detecta-vulnerabilidade, ci-dotnet, ci-java, ci-go, ci-node, ci-python, ci-react-ts]
+    needs: [estatico, sast-detecta-vulnerabilidade, dast-efemero, ci-dotnet, ci-java, ci-go, ci-node, ci-python, ci-react-ts]
     if: always()
     runs-on: ubuntu-latest
     steps:
