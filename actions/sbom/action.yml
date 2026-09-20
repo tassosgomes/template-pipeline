@@ -1,0 +1,28 @@
+name: 'SBOM'
+description: 'Gera o SBOM (SPDX JSON) do diretório do projeto ou da imagem construída, e anexa como artifact.'
+
+inputs:
+  source:
+    description: 'Alvo do syft: um caminho (dir:.) ou uma imagem. Default: o working-directory.'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Diretório do projeto, usado quando source está vazio.'
+    required: false
+    default: '.'
+  artifact-name:
+    description: 'Nome do artifact do SBOM.'
+    required: false
+    default: 'sbom'
+
+runs:
+  using: composite
+  steps:
+    - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      with:
+        path: ${{ inputs.source == '' && inputs.working-directory || '' }}
+        image: ${{ inputs.source != '' && inputs.source || '' }}
+        format: spdx-json
+        artifact-name: ${{ inputs.artifact-name }}.spdx.json
+        output-file: ${{ runner.temp }}/${{ inputs.artifact-name }}.spdx.json
+        upload-artifact: 'true'

@@ -1,0 +1,81 @@
+name: 'Detect Stack'
+description: 'Descobre a stack, o gerenciador de pacotes e a presença de Dockerfile a partir dos manifestos do repositório.'
+
+inputs:
+  working-directory:
+    description: 'Diretório onde procurar os manifestos.'
+    required: false
+    default: '.'
+
+outputs:
+  stack:
+    description: 'dotnet | java | go | node | react-ts | python | unknown'
+    value: ${{ steps.detect.outputs.stack }}
+  package-manager:
+    description: 'npm | pnpm | yarn | maven | gradle | uv | poetry | pip | gomod | dotnet | none'
+    value: ${{ steps.detect.outputs.package-manager }}
+  has-dockerfile:
+    description: 'true quando existe um Dockerfile no diretório.'
+    value: ${{ steps.detect.outputs.has-dockerfile }}
+  codeql-language:
+    description: 'Identificador de linguagem aceito pelo CodeQL, ou vazio.'
+    value: ${{ steps.detect.outputs.codeql-language }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        stack=unknown
+        pm=none
+        codeql=""
+
+        has() { compgen -G "$1" > /dev/null 2>&1; }
+
+        if has "*.sln" || has "*.csproj" || has "**/*.csproj" || has "*.fsproj"; then
+          stack=dotnet; pm=dotnet; codeql=csharp
+        elif [ -f pom.xml ]; then
+          stack=java; pm=maven; codeql=java
+        elif [ -f build.gradle ] || [ -f build.gradle.kts ]; then
+          stack=java; pm=gradle; codeql=java
+        elif [ -f go.mod ]; then
+          stack=go; pm=gomod; codeql=go
+        elif [ -f package.json ]; then
+          codeql=javascript-typescript
+          # react-ts é node com typescript + uma das libs de react no manifesto
+          if [ -f tsconfig.json ] && grep -qE '"(react|next)"[[:space:]]*:' package.json; then
+            stack=react-ts
+          else
+            stack=node
+          fi
+          if   [ -f pnpm-lock.yaml ];      then pm=pnpm
+          elif [ -f yarn.lock ];           then pm=yarn
+          else                                  pm=npm
+          fi
+        elif [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f setup.py ]; then
+          stack=python; codeql=python
+          if   [ -f uv.lock ];             then pm=uv
+          elif [ -f poetry.lock ];         then pm=poetry
+          else                                  pm=pip
+          fi
+        fi
+
+        dockerfile=false
+        [ -f Dockerfile ] && dockerfile=true
+
+        {
+          echo "stack=$stack"
+          echo "package-manager=$pm"
+          echo "has-dockerfile=$dockerfile"
+          echo "codeql-language=$codeql"
+        } >> "$GITHUB_OUTPUT"
+
+        echo "::notice title=Stack detectada::${stack} (gerenciador: ${pm}, Dockerfile: ${dockerfile})"
+
+        if [ "$stack" = "unknown" ]; then
+          echo "::warning title=Stack não detectada::Nenhum manifesto reconhecido em '${{ inputs.working-directory }}'. Informe a stack explicitamente no workflow."
+        fi

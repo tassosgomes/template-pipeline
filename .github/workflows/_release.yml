@@ -1,0 +1,107 @@
+name: Release da plataforma
+
+# Publica uma versão da plataforma e reposiciona a tag major móvel.
+#
+# Fluxo: o mantenedor cria a tag semver (`git tag v1.2.3 && git push --tags`); este workflow
+# valida e move `v1` para o mesmo commit. Os repositórios consumidores referenciam `@v1` e
+# recebem correções sem mudar uma linha de YAML.
+#
+# Ver ADR 0003: `v1` também é o default do input `platform-ref`, por isso ela precisa existir.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag semver já existente a (re)promover, ex.: v1.2.3'
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  promover:
+    name: Promover tag major
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - id: tag
+        name: Validar a tag
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "${DISPATCH_TAG:-}" ]; then
+            tag="$DISPATCH_TAG"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if ! echo "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error title=Tag inválida::'$tag' não segue vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+
+          if ! git rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+            echo "::error title=Tag inexistente::'$tag' não existe neste repositório."
+            exit 1
+          fi
+
+          major="${tag%%.*}"
+          {
+            echo "tag=$tag"
+            echo "major=$major"
+            echo "sha=$(git rev-list -n1 "$tag")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Publicar uma versão sem o self-test verde é publicar uma regressão. Verificamos
+      # a conclusão do self-test no commit exato que a tag aponta.
+      - name: Exigir self-test verde no commit da tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          concl=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/_selftest.yml/runs?head_sha=${SHA}&status=completed" \
+                    --jq '[.workflow_runs[].conclusion] | first // "ausente"')
+
+          if [ "$concl" != "success" ]; then
+            echo "::error title=Self-test não está verde::A execução do self-test em ${SHA} terminou como '${concl}'. Corrija antes de publicar."
+            exit 1
+          fi
+          echo "✅ self-test verde em ${SHA}"
+
+      - name: Mover a tag major
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          MAJOR: ${{ steps.tag.outputs.major }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          git tag -f "$MAJOR" "$SHA"
+          git push -f origin "refs/tags/${MAJOR}"
+
+          {
+            echo "## 🚀 Plataforma ${TAG} publicada"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Versão | \`${TAG}\` |"
+            echo "| Tag major | \`${MAJOR}\` → \`${SHA}\` |"
+            echo
+            echo "Os repositórios que referenciam \`@${MAJOR}\` passam a usar esta versão."
+          } >> "$GITHUB_STEP_SUMMARY"

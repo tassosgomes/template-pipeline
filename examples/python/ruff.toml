@@ -1,0 +1,6 @@
+# O fixture contém uma vulnerabilidade plantada de propósito; o ruff não deve reprovar
+# por causa dela — quem a reporta é o SAST (bandit/Semgrep), que é o ponto do teste.
+line-length = 100
+
+[lint]
+select = ["E", "F", "I"]

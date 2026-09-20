@@ -1,0 +1,22 @@
+[project]
+name = "fixture-python"
+version = "0.1.0"
+description = "Fixture Python da plataforma"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov", "ruff"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["fixture"]
+
+[tool.pytest.ini_options]
+addopts = "--cov=fixture"
+
+[tool.coverage.run]
+source = ["fixture"]

@@ -1,0 +1,11 @@
+{
+  "name": "fixture-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fixture Node da plataforma: sem dependências, teste real, vulnerabilidade plantada.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "build": "node ./build.mjs"
+  }
+}

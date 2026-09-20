@@ -1,0 +1,83 @@
+name: 'Ephemeral App'
+description: >
+  Sobe a imagem recém-construída em um container e aguarda o healthcheck, para servir de alvo
+  ao DAST dentro do próprio job de CI. Sempre derrube com o post-step (o caller deve usar
+  actions/ephemeral-app/stop ou `if: always()`).
+
+inputs:
+  image-ref:
+    description: 'Imagem a executar.'
+    required: true
+  port:
+    description: 'Porta exposta pelo container.'
+    required: false
+    default: '8080'
+  health-path:
+    description: 'Caminho do healthcheck, relativo à raiz.'
+    required: false
+    default: '/health'
+  startup-timeout:
+    description: 'Segundos a aguardar pelo healthcheck antes de desistir.'
+    required: false
+    default: '90'
+  env-vars:
+    description: 'Variáveis de ambiente do container, uma por linha no formato CHAVE=valor.'
+    required: false
+    default: ''
+  container-name:
+    description: 'Nome do container, usado para derrubá-lo depois.'
+    required: false
+    default: 'dast-target'
+
+outputs:
+  base-url:
+    description: 'URL base do alvo, pronta para o DAST.'
+    value: ${{ steps.run.outputs.base-url }}
+  container-name:
+    description: 'Nome do container criado.'
+    value: ${{ inputs.container-name }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image-ref }}
+        PORT: ${{ inputs.port }}
+        HEALTH: ${{ inputs.health-path }}
+        TIMEOUT: ${{ inputs.startup-timeout }}
+        NAME: ${{ inputs.container-name }}
+        ENV_VARS: ${{ inputs.env-vars }}
+      run: |
+        set -euo pipefail
+
+        env_args=()
+        while IFS= read -r line; do
+          [ -z "${line// }" ] && continue
+          env_args+=(-e "$line")
+        done <<< "$ENV_VARS"
+
+        docker run -d --name "$NAME" -p "${PORT}:${PORT}" "${env_args[@]+"${env_args[@]}"}" "$IMAGE"
+
+        base="http://localhost:${PORT}"
+        echo "base-url=${base}" >> "$GITHUB_OUTPUT"
+
+        echo "Aguardando ${base}${HEALTH} responder (timeout ${TIMEOUT}s)..."
+        deadline=$(( SECONDS + TIMEOUT ))
+        until curl -sSf -o /dev/null "${base}${HEALTH}"; do
+          if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "::error title=Alvo do DAST não subiu::${base}${HEALTH} não respondeu em ${TIMEOUT}s."
+            echo "--- últimos logs do container ---"
+            docker logs --tail 100 "$NAME" || true
+            exit 1
+          fi
+          if [ -z "$(docker ps -q -f name="^${NAME}$")" ]; then
+            echo "::error title=Container morreu::O container '${NAME}' parou antes de ficar saudável."
+            docker logs --tail 100 "$NAME" || true
+            exit 1
+          fi
+          sleep 2
+        done
+
+        echo "::notice title=Alvo do DAST pronto::${base}"

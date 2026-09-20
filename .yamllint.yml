@@ -1,0 +1,21 @@
+# Regras frouxas de propósito: o objetivo é pegar YAML quebrado, não impor estilo.
+# Quem valida semântica de workflow é o actionlint.
+extends: default
+
+rules:
+  line-length: disable
+  comments-indentation: disable
+  # Os pins de SHA seguem a convenção do ecossistema (`@<sha> # v1.2.3`, um espaço),
+  # que é também o que o Dependabot escreve. Exigir dois espaços brigaria com a ferramenta.
+  comments:
+    require-starting-space: true
+    min-spaces-from-content: 1
+  document-start: disable
+  truthy:
+    # 'on:' em workflow do GitHub é chave, não booleano.
+    check-keys: false
+  braces:
+    max-spaces-inside: 1
+  indentation:
+    spaces: consistent
+    indent-sequences: consistent

@@ -1,0 +1,213 @@
+name: 'Upload Findings'
+description: >
+  Publica um SARIF no code scanning e, quando o repositório não tem code scanning disponível
+  (repo privado no plano Free), degrada para artifact + job summary. Aplica o gate de severidade.
+
+inputs:
+  sarif-file:
+    description: 'Caminho do arquivo SARIF a publicar.'
+    required: true
+  category:
+    description: 'Categoria no code scanning. Precisa ser única por ferramenta dentro do mesmo repositório.'
+    required: true
+  tool-name:
+    description: 'Nome legível da ferramenta, usado no job summary.'
+    required: true
+  severity-fail-on:
+    description: 'none | critical | high | medium | low — menor severidade que reprova o job.'
+    required: false
+    default: 'high'
+  mode:
+    description: 'observe (nunca reprova, só reporta) | enforce (aplica o gate).'
+    required: false
+    default: 'observe'
+  publish:
+    description: >
+      Publica no code scanning. Desligue quando os achados forem intencionais (fixtures de
+      teste) ou quando o repositório estiver calibrando em modo observação e não quiser o
+      check vermelho no PR. Com false, o gate continua sendo aplicado sobre artifact e
+      job summary.
+    required: false
+    default: 'true'
+  artifact-name:
+    description: 'Nome do artifact de fallback. Default: findings-<category>.'
+    required: false
+    default: ''
+
+outputs:
+  critical:
+    description: 'Quantidade de achados críticos.'
+    value: ${{ steps.count.outputs.critical }}
+  high:
+    description: 'Quantidade de achados altos.'
+    value: ${{ steps.count.outputs.high }}
+  medium:
+    description: 'Quantidade de achados médios.'
+    value: ${{ steps.count.outputs.medium }}
+  low:
+    description: 'Quantidade de achados baixos.'
+    value: ${{ steps.count.outputs.low }}
+  total:
+    description: 'Total de achados.'
+    value: ${{ steps.count.outputs.total }}
+  counts:
+    description: 'JSON com a contagem por severidade.'
+    value: ${{ steps.count.outputs.counts }}
+  published-to-code-scanning:
+    description: 'true quando o SARIF foi aceito pelo code scanning; false quando caiu no fallback.'
+    value: ${{ steps.publish.outputs.published }}
+
+runs:
+  using: composite
+  steps:
+    # ------------------------------------------------------------------ contagem
+    - id: count
+      shell: bash
+      env:
+        SARIF: ${{ inputs.sarif-file }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -s "$SARIF" ]; then
+          echo "::warning title=SARIF ausente::'$SARIF' não existe ou está vazio; tratando como zero achados."
+          counts='{"critical":0,"high":0,"medium":0,"low":0,"total":0}'
+        elif ! jq -e . "$SARIF" > /dev/null 2>&1; then
+          echo "::warning title=SARIF inválido::'$SARIF' não é JSON válido; tratando como zero achados."
+          counts='{"critical":0,"high":0,"medium":0,"low":0,"total":0}'
+        else
+          counts=$(jq -c -f "${{ github.action_path }}/count-sarif.jq" "$SARIF")
+        fi
+
+        echo "counts=$counts" >> "$GITHUB_OUTPUT"
+        for k in critical high medium low total; do
+          echo "$k=$(echo "$counts" | jq -r ".$k")" >> "$GITHUB_OUTPUT"
+        done
+
+    # ------------------------------------------- tentativa de publicar no code scanning
+    - id: upload
+      # Repo privado no plano Free não tem code scanning: este passo falha e seguimos no fallback.
+      continue-on-error: true
+      if: inputs.publish == 'true' && hashFiles(inputs.sarif-file) != ''
+      uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+      with:
+        sarif_file: ${{ inputs.sarif-file }}
+        category: ${{ inputs.category }}
+
+    - id: publish
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.publish }}" != "true" ]; then
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Publicação desligada::publish=false; os achados de ${{ inputs.tool-name }} vão como artifact + job summary."
+        elif [ "${{ steps.upload.outcome }}" = "success" ]; then
+          echo "published=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "published=false" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Fallback de SARIF::Code scanning indisponível neste repositório (esperado em repo privado no plano Free). Os achados de ${{ inputs.tool-name }} vão como artifact + job summary."
+        fi
+
+    # --------------------------------------------------- fallback: artifact com o SARIF
+    - if: steps.publish.outputs.published == 'false' && hashFiles(inputs.sarif-file) != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name != '' && inputs.artifact-name || format('findings-{0}', inputs.category) }}
+        path: ${{ inputs.sarif-file }}
+        if-no-files-found: warn
+        retention-days: 30
+
+    # -------------------------------------------------------------------- job summary
+    - shell: bash
+      env:
+        COUNTS: ${{ steps.count.outputs.counts }}
+        SARIF: ${{ inputs.sarif-file }}
+      run: |
+        set -euo pipefail
+
+        crit=$(echo "$COUNTS" | jq -r .critical)
+        high=$(echo "$COUNTS" | jq -r .high)
+        med=$(echo  "$COUNTS" | jq -r .medium)
+        low=$(echo  "$COUNTS" | jq -r .low)
+        tot=$(echo  "$COUNTS" | jq -r .total)
+
+        if   [ "$crit" -gt 0 ] || [ "$high" -gt 0 ]; then icon="🔴"
+        elif [ "$tot"  -gt 0 ];                       then icon="⚠️"
+        else                                               icon="✅"
+        fi
+
+        {
+          echo "### $icon ${{ inputs.tool-name }}"
+          echo
+          echo "| Crítico | Alto | Médio | Baixo | Total |"
+          echo "|--:|--:|--:|--:|--:|"
+          echo "| $crit | $high | $med | $low | $tot |"
+          echo
+          if [ "${{ steps.publish.outputs.published }}" = "true" ]; then
+            echo "Detalhes na aba **Security → Code scanning** (categoria \`${{ inputs.category }}\`)."
+          else
+            echo "> Code scanning indisponível neste repositório — SARIF anexado como artifact."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Os 10 achados mais severos, para não exigir download do artifact no caso comum.
+        if [ "$tot" -gt 0 ] && [ -s "$SARIF" ]; then
+          {
+            echo
+            echo "<details><summary>Principais achados (até 10)</summary>"
+            echo
+            echo "| Regra | Local | Mensagem |"
+            echo "|---|---|---|"
+            jq -r '
+              [ (.runs // [])[] | (.results // [])[] ]
+              | sort_by(if .level == "error" then 0 elif .level == "warning" then 1 else 2 end)
+              | .[0:10][]
+              | [ (.ruleId // "-")
+                , ((.locations // [])[0].physicalLocation.artifactLocation.uri // "-")
+                  + ":" + (((.locations // [])[0].physicalLocation.region.startLine // 0) | tostring)
+                , ((.message.text // "-") | gsub("[|\n\r]"; " ") | .[0:160])
+                ] | "| `" + .[0] + "` | " + .[1] + " | " + .[2] + " |"
+            ' "$SARIF" || echo "| - | - | falha ao renderizar os achados |"
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    # -------------------------------------------------------------- gate de severidade
+    - shell: bash
+      env:
+        COUNTS: ${{ steps.count.outputs.counts }}
+      run: |
+        set -euo pipefail
+
+        mode="${{ inputs.mode }}"
+        fail_on="${{ inputs.severity-fail-on }}"
+
+        crit=$(echo "$COUNTS" | jq -r .critical)
+        high=$(echo "$COUNTS" | jq -r .high)
+        med=$(echo  "$COUNTS" | jq -r .medium)
+        low=$(echo  "$COUNTS" | jq -r .low)
+
+        # Quantos achados estão no nível de corte ou acima dele.
+        case "$fail_on" in
+          none)     offending=0 ;;
+          critical) offending=$crit ;;
+          high)     offending=$(( crit + high )) ;;
+          medium)   offending=$(( crit + high + med )) ;;
+          low)      offending=$(( crit + high + med + low )) ;;
+          *)
+            echo "::error title=Input inválido::severity-fail-on='$fail_on' não é válido (none|critical|high|medium|low)."
+            exit 1
+            ;;
+        esac
+
+        if [ "$offending" -eq 0 ]; then
+          echo "::notice title=${{ inputs.tool-name }}::Nenhum achado no nível '$fail_on' ou acima."
+          exit 0
+        fi
+
+        if [ "$mode" = "enforce" ]; then
+          echo "::error title=${{ inputs.tool-name }} reprovou::$offending achado(s) no nível '$fail_on' ou acima. Corrija, ou justifique a exceção no arquivo de supressão do repositório."
+          exit 1
+        fi
+
+        echo "::warning title=${{ inputs.tool-name }} (modo observação)::$offending achado(s) no nível '$fail_on' ou acima. O build NÃO foi reprovado porque security-mode=observe."

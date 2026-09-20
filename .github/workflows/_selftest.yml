@@ -1,0 +1,314 @@
+name: Self-test da plataforma
+
+# Suíte de regressão da plataforma. Nada é liberado sem ela verde.
+#
+# Os jobs de pipeline passam `platform-ref: ${{ github.sha }}` para que os workflows
+# reusáveis carreguem as composite actions DESTE commit, e não da última tag publicada
+# (ver ADR 0003). É isso que faz o self-test proteger de verdade contra regressão.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  estatico:
+    name: Lint e contrato
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: actionlint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=1.7.12
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz" \
+            | tar -xz actionlint
+          ./actionlint -color
+
+      - name: yamllint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --disable-pip-version-check yamllint
+          yamllint --strict -c .yamllint.yml .github/workflows actions
+
+      - name: Contrato idêntico entre as stacks (ADR 0002)
+        run: ./scripts/check-contract.sh
+
+      - name: Actions de terceiros pinadas por SHA (pesquisa §5.2)
+        run: ./scripts/check-pins.sh
+
+  # ===========================================================================
+  # Prova que o SAST realmente analisa o código e que o gate de severidade funciona.
+  # Sem este job, um scan quebrado passaria despercebido como "zero achados".
+  sast-detecta-vulnerabilidade:
+    name: SAST detecta a vulnerabilidade plantada
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - id: sast
+        uses: ./actions/sast
+        with:
+          stack: node
+          working-directory: examples/node
+
+      - name: O SARIF precisa conter ao menos um achado
+        shell: bash
+        run: |
+          set -euo pipefail
+          n=$(jq '[.runs[].results // [] | length] | add // 0' sast.sarif)
+          echo "Achados no fixture examples/node: $n"
+          if [ "$n" -eq 0 ]; then
+            echo "::error title=SAST não detectou nada::O fixture examples/node contém uma injeção de comando plantada de propósito. Zero achados significa que o scan não rodou ou que as regras mudaram."
+            exit 1
+          fi
+
+      # O modo observação NÃO pode reprovar, mesmo com achados.
+      - id: observe
+        continue-on-error: true
+        uses: ./actions/upload-findings
+        with:
+          sarif-file: sast.sarif
+          category: selftest-observe
+          tool-name: 'Self-test · modo observação'
+          publish: false
+          severity-fail-on: low
+          mode: observe
+
+      # O modo enforce PRECISA reprovar diante dos mesmos achados.
+      - id: enforce
+        continue-on-error: true
+        uses: ./actions/upload-findings
+        with:
+          sarif-file: sast.sarif
+          category: selftest-enforce
+          tool-name: 'Self-test · modo enforce'
+          publish: false
+          severity-fail-on: low
+          mode: enforce
+
+      - name: Conferir o comportamento dos dois modos
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+
+          if [ "${{ steps.observe.outcome }}" != "success" ]; then
+            echo "::error title=Modo observação reprovou::security-mode=observe nunca deve reprovar o job."
+            status=1
+          fi
+
+          if [ "${{ steps.enforce.outcome }}" != "failure" ]; then
+            echo "::error title=Gate não reprovou::security-mode=enforce com achados presentes deveria ter reprovado o job."
+            status=1
+          fi
+
+          [ "$status" -eq 0 ] && echo "✅ observe não reprova, enforce reprova — gate correto."
+          exit "$status"
+
+  # ===========================================================================
+  # Cada pipeline roda de ponta a ponta contra o seu fixture.
+  # security-mode fica em observe porque os fixtures contêm vulnerabilidades plantadas.
+  ci-dotnet:
+    name: Pipeline · dotnet
+    uses: ./.github/workflows/ci-dotnet.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/dotnet
+      version: '8.0.x'
+      platform-ref: ${{ github.sha }}
+      security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
+
+  ci-java:
+    name: Pipeline · java
+    uses: ./.github/workflows/ci-java.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/java
+      version: '21'
+      platform-ref: ${{ github.sha }}
+      security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
+
+  ci-go:
+    name: Pipeline · go
+    uses: ./.github/workflows/ci-go.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/go
+      version: '1.23'
+      platform-ref: ${{ github.sha }}
+      security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
+
+  ci-node:
+    name: Pipeline · node
+    uses: ./.github/workflows/ci-node.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/node
+      version: '22'
+      platform-ref: ${{ github.sha }}
+      security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
+
+  ci-python:
+    name: Pipeline · python
+    uses: ./.github/workflows/ci-python.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/python
+      version: '3.12'
+      platform-ref: ${{ github.sha }}
+      # O fixture python tem cobertura real de 100%; o gate precisa passar.
+      coverage-threshold: 90
+      security-mode: observe
+      publish-findings: false
+
+  ci-react-ts:
+    name: Pipeline · react-ts
+    uses: ./.github/workflows/ci-react-ts.yml
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      working-directory: examples/react-ts
+      version: '22'
+      platform-ref: ${{ github.sha }}
+      security-mode: observe
+      # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
+      # scanning encheria a aba Security da plataforma de alerta permanente e intencional,
+      # escondendo achado real. O gate continua sendo aplicado sobre o job summary.
+      publish-findings: false
+
+  # ===========================================================================
+  # O DAST é a única camada que precisa de aplicação de pé, então ela não é
+  # exercitada pelos jobs de pipeline (que rodam sem container). Este job sobe a
+  # imagem do fixture e percorre a cadeia inteira: ephemeral-app -> ZAP -> SARIF -> gate.
+  dast-efemero:
+    name: DAST efêmero sobe o alvo e reporta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Construída localmente, sem publicar: o self-test não deve criar pacotes no GHCR.
+      - name: Construir a imagem do fixture
+        shell: bash
+        run: docker build -t dast-fixture:selftest examples/node
+
+      - id: target
+        uses: ./actions/ephemeral-app
+        with:
+          image-ref: dast-fixture:selftest
+          port: 8080
+          health-path: /health
+          container-name: dast-selftest
+
+      - uses: ./actions/dast-zap
+        with:
+          target-url: ${{ steps.target.outputs.base-url }}
+          scan-type: baseline
+
+      - id: findings
+        uses: ./actions/upload-findings
+        with:
+          sarif-file: dast.sarif
+          category: selftest-dast
+          tool-name: 'Self-test · DAST'
+          publish: false
+          severity-fail-on: none
+          mode: observe
+
+      - name: O ZAP precisa ter reportado ao menos um achado
+        shell: bash
+        env:
+          TOTAL: ${{ steps.findings.outputs.total }}
+        run: |
+          set -euo pipefail
+          echo "Achados do ZAP: ${TOTAL:-0}"
+          if [ "${TOTAL:-0}" -eq 0 ]; then
+            echo "::error title=DAST não reportou nada::O fixture serve uma página sem CSP nem X-Content-Type-Options; o ZAP baseline deveria reportar isso. Zero achados significa que o scan não alcançou o alvo ou que a conversão para SARIF quebrou."
+            exit 1
+          fi
+
+      - name: Derrubar o alvo
+        if: always()
+        shell: bash
+        run: docker rm -f dast-selftest || true
+
+      - name: O container não pode sobreviver ao job
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$(docker ps -aq -f name='^dast-selftest$')" ]; then
+            echo "::error title=Container vazou::'dast-selftest' continua existindo após a limpeza."
+            exit 1
+          fi
+          echo "✅ alvo derrubado"
+
+  # ===========================================================================
+  resultado:
+    name: Resultado do self-test
+    needs: [estatico, sast-detecta-vulnerabilidade, dast-efemero, ci-dotnet, ci-java, ci-go, ci-node, ci-python, ci-react-ts]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Self-test da plataforma"
+            echo
+            echo "| Job | Resultado |"
+            echo "|---|---|"
+            echo "$RESULTS" | jq -r 'to_entries[] | "| \(.key) | \(if .value.result == "success" then "✅" else "❌" end) \(.value.result) |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if echo "$RESULTS" | jq -e 'to_entries | map(select(.value.result != "success")) | length > 0' > /dev/null; then
+            echo "::error title=Self-test reprovou::Ao menos um job falhou. A plataforma não deve ser publicada neste estado."
+            exit 1
+          fi
+          echo "✅ self-test completo"

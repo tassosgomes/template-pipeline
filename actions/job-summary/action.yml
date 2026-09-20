@@ -1,0 +1,72 @@
+name: 'Job Summary'
+description: 'Escreve no job summary o resultado consolidado do pipeline de CI.'
+
+inputs:
+  stack:
+    description: 'Stack executada.'
+    required: true
+  version:
+    description: 'Versão da toolchain usada.'
+    required: false
+    default: ''
+  build-version:
+    description: 'Versão calculada do artefato.'
+    required: false
+    default: ''
+  coverage:
+    description: 'Cobertura de testes em percentual, se apurada.'
+    required: false
+    default: ''
+  coverage-threshold:
+    description: 'Limite mínimo de cobertura configurado.'
+    required: false
+    default: '0'
+  artifact-name:
+    description: 'Nome do artifact publicado.'
+    required: false
+    default: ''
+  image-digest:
+    description: 'Digest da imagem publicada.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        TOOLCHAIN: ${{ inputs.version }}
+        BUILD_VERSION: ${{ inputs.build-version }}
+        COVERAGE: ${{ inputs.coverage }}
+        THRESHOLD: ${{ inputs.coverage-threshold }}
+        ARTIFACT: ${{ inputs.artifact-name }}
+        DIGEST: ${{ inputs.image-digest }}
+      run: |
+        set -euo pipefail
+
+        row() { [ -n "${2:-}" ] && echo "| $1 | $2 |" || true; }
+
+        {
+          echo "## 📦 Build — \`${STACK}\`"
+          echo
+          echo "| | |"
+          echo "|---|---|"
+          row "Toolchain"  "$TOOLCHAIN"
+          row "Versão"     "\`${BUILD_VERSION}\`"
+          row "Artifact"   "$ARTIFACT"
+          row "Imagem"     "\`${DIGEST}\`"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ -n "$COVERAGE" ]; then
+          icon="✅"
+          if [ "${THRESHOLD:-0}" != "0" ]; then
+            # awk porque a cobertura é fracionária e o test do shell só compara inteiros.
+            if awk "BEGIN{exit !($COVERAGE < $THRESHOLD)}"; then icon="🔴"; fi
+            echo "| Cobertura | ${icon} ${COVERAGE}% (mínimo ${THRESHOLD}%) |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Cobertura | ${COVERAGE}% |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        echo "" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,92 @@
+name: 'DAST (OWASP ZAP)'
+description: >
+  Roda o OWASP ZAP contra uma aplicação em execução e converte o relatório para SARIF,
+  para que o DAST use o mesmo caminho de publicação e de gate do SAST.
+
+inputs:
+  target-url:
+    description: 'URL da aplicação em execução.'
+    required: true
+  scan-type:
+    description: 'baseline (passivo, rápido) | api (dirigido por OpenAPI) | full (ativo, lento).'
+    required: false
+    default: 'baseline'
+  openapi-spec:
+    description: 'URL ou caminho da spec OpenAPI. Obrigatório quando scan-type=api.'
+    required: false
+    default: ''
+  rules-file:
+    description: 'Arquivo de supressão do ZAP (formato rules.tsv) no repositório consumidor.'
+    required: false
+    default: ''
+  output-file:
+    description: 'Caminho do SARIF de saída, relativo ao workspace.'
+    required: false
+    default: 'dast.sarif'
+
+outputs:
+  sarif-file:
+    description: 'Caminho do SARIF gerado.'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.scan-type }}" = "api" ] && [ -z "${{ inputs.openapi-spec }}" ]; then
+          echo "::error title=Input faltando::scan-type=api exige 'openapi-spec'."
+          exit 1
+        fi
+        if [ "${{ inputs.scan-type }}" = "full" ]; then
+          echo "::warning title=Scan ativo::O full scan gera tráfego de ataque real contra ${{ inputs.target-url }}. Confirme que este NÃO é um ambiente de produção."
+        fi
+
+    # allow_issue_writing: false — a plataforma reporta pelo job summary e pelo code scanning;
+    # deixar o ZAP abrir issue sozinho polui o backlog do time de produto.
+    # fail_action: false — o gate de severidade é do upload-findings.
+    - if: inputs.scan-type == 'baseline'
+      uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+      with:
+        target: ${{ inputs.target-url }}
+        rules_file_name: ${{ inputs.rules-file }}
+        allow_issue_writing: false
+        fail_action: false
+        artifact_name: zap-baseline
+
+    - if: inputs.scan-type == 'api'
+      uses: zaproxy/action-api-scan@5158fe4d9d8fcc75ea204db81317cce7f9e5453d # v0.10.0
+      with:
+        target: ${{ inputs.openapi-spec }}
+        rules_file_name: ${{ inputs.rules-file }}
+        allow_issue_writing: false
+        fail_action: false
+        artifact_name: zap-api
+
+    - if: inputs.scan-type == 'full'
+      uses: zaproxy/action-full-scan@3c58388149901b9a03b7718852c5ba889646c27c # v0.13.0
+      with:
+        target: ${{ inputs.target-url }}
+        rules_file_name: ${{ inputs.rules-file }}
+        allow_issue_writing: false
+        fail_action: false
+        artifact_name: zap-full
+
+    - shell: bash
+      env:
+        OUT: ${{ inputs.output-file }}
+      run: |
+        set -euo pipefail
+
+        # As actions do ZAP escrevem report_json.json na raiz do workspace.
+        report="${GITHUB_WORKSPACE}/report_json.json"
+
+        if [ ! -s "$report" ]; then
+          echo "::warning title=Relatório do ZAP ausente::report_json.json não foi produzido; gerando SARIF vazio."
+          printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$OUT"
+          exit 0
+        fi
+
+        jq -f "${{ github.action_path }}/zap-to-sarif.jq" "$report" > "$OUT"
+        echo "DAST convertido para SARIF: $(jq '[.runs[].results // [] | length] | add // 0' "$OUT") resultado(s)."

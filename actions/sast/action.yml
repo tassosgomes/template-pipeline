@@ -1,0 +1,149 @@
+name: 'SAST'
+description: >
+  Análise estática de segurança: Semgrep (camada uniforme para todas as stacks) mais o linter
+  de segurança nativo da stack quando existe. Produz um único SARIF consolidado.
+
+inputs:
+  stack:
+    description: 'dotnet | java | go | node | react-ts | python'
+    required: true
+  working-directory:
+    description: 'Diretório a analisar.'
+    required: false
+    default: '.'
+  semgrep-config:
+    description: 'Rulesets do Semgrep, separados por espaço.'
+    required: false
+    default: 'p/security-audit p/owasp-top-ten'
+  use-platform-rules:
+    description: >
+      Inclui as regras próprias da plataforma (actions/sast/rules/platform.yml). Elas cobrem
+      lacunas medidas nos rulesets OSS para C# e TypeScript/React.
+    required: false
+    default: 'true'
+  exclude-paths:
+    description: >
+      Caminhos a excluir da análise, separados por espaço. O default exclui o checkout da
+      própria plataforma: sem isso, um repositório com working-directory '.' receberia as
+      vulnerabilidades plantadas em .platform/examples/ como achados do seu próprio código.
+    required: false
+    default: '.platform'
+  run-stack-linter:
+    description: 'Roda também o linter de segurança específico da stack.'
+    required: false
+    default: 'true'
+  output-file:
+    description: 'Caminho do SARIF consolidado, relativo ao workspace.'
+    required: false
+    default: 'sast.sarif'
+
+outputs:
+  sarif-file:
+    description: 'Caminho do SARIF consolidado.'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    # ------------------------------------------------------------------------ semgrep
+    # Roda em container pinado por versão: não depende da toolchain da stack e mantém
+    # o resultado reprodutível. --metrics=off evita enviar telemetria do nosso código.
+    - id: semgrep
+      shell: bash
+      env:
+        SEMGREP_IMAGE: semgrep/semgrep:1.177.0
+        WD: ${{ inputs.working-directory }}
+        CONFIGS: ${{ inputs.semgrep-config }}
+        EXCLUDES: ${{ inputs.exclude-paths }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${RUNNER_TEMP}/sast"
+
+        args=()
+        for c in $CONFIGS; do args+=(--config "$c"); done
+        for e in $EXCLUDES; do args+=(--exclude "$e"); done
+
+        # As regras próprias vão junto com a action; copiamos para o diretório já montado
+        # no container, porque o caminho da action no host não existe dentro dele.
+        if [ "${{ inputs.use-platform-rules }}" = "true" ]; then
+          mkdir -p "${RUNNER_TEMP}/sast/rules"
+          cp "${{ github.action_path }}/rules/platform.yml" "${RUNNER_TEMP}/sast/rules/"
+          args+=(--config /out/rules/platform.yml)
+        fi
+
+        set +e
+        docker run --rm \
+          -v "${GITHUB_WORKSPACE}:/src" \
+          -v "${RUNNER_TEMP}/sast:/out" \
+          -w "/src/${WD}" \
+          --user "$(id -u):$(id -g)" \
+          -e HOME=/tmp \
+          -e SEMGREP_SEND_METRICS=off \
+          "$SEMGREP_IMAGE" \
+          semgrep scan --metrics=off --sarif --output /out/semgrep.sarif "${args[@]}"
+        rc=$?
+        set -e
+
+        # 0 = sem achados, 1 = achados encontrados. Qualquer outro código é falha real da
+        # ferramenta, e aí o job precisa quebrar mesmo em modo observação — um scan que não
+        # rodou não pode ser confundido com um scan limpo.
+        if [ "$rc" -gt 1 ]; then
+          echo "::error title=Semgrep falhou::Código de saída $rc. O scan não foi concluído."
+          exit "$rc"
+        fi
+        echo "Semgrep concluído (rc=$rc)."
+
+    # --------------------------------------------------------------------- gosec (go)
+    - id: gosec
+      if: inputs.stack == 'go' && inputs.run-stack-linter == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+        # -no-fail: o gate de severidade é nosso, não da ferramenta.
+        "$(go env GOPATH)/bin/gosec" -no-fail -fmt sarif -out "${RUNNER_TEMP}/sast/gosec.sarif" ./... || true
+
+    # ------------------------------------------------------------------ bandit (python)
+    - id: bandit
+      if: inputs.stack == 'python' && inputs.run-stack-linter == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        python -m pip install --quiet --disable-pip-version-check 'bandit==1.9.4'
+        # --exit-zero: o gate de severidade é nosso.
+        python -m bandit --exit-zero -r . -f sarif -o "${RUNNER_TEMP}/sast/bandit.sarif" || true
+
+    # ----------------------------------------------------------- consolidação dos SARIF
+    - shell: bash
+      env:
+        OUT: ${{ inputs.output-file }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=("${RUNNER_TEMP}/sast"/*.sarif)
+
+        if [ ${#files[@]} -eq 0 ]; then
+          echo "::warning title=SAST sem saída::Nenhuma ferramenta produziu SARIF."
+          printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$OUT"
+          exit 0
+        fi
+
+        # Descarta arquivos inválidos em vez de derrubar a consolidação inteira.
+        valid=()
+        for f in "${files[@]}"; do
+          if jq -e '.runs' "$f" > /dev/null 2>&1; then
+            valid+=("$f")
+          else
+            echo "::warning title=SARIF inválido::$(basename "$f") foi ignorado na consolidação."
+          fi
+        done
+
+        jq -s '{
+          version: "2.1.0",
+          "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+          runs: (map(.runs // []) | add // [])
+        }' "${valid[@]}" > "$OUT"
+
+        echo "SAST consolidado em $OUT ($(jq '[.runs[].results // [] | length] | add // 0' "$OUT") resultado(s), $(jq '.runs | length' "$OUT") run(s))."
