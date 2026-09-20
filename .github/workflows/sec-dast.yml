@@ -62,16 +62,15 @@ on:
         description: 'JSON com a contagem de achados do DAST por severidade.'
         value: ${{ jobs.scan.outputs.findings }}
 
-permissions:
-  contents: read
+# Sem bloco `permissions` de propósito: em workflow reusável, o que é declarado aqui
+# vira exigência sobre quem chama — e pedir mais do que o chamador concedeu faz o run
+# falhar na largada, antes de criar job algum. Cada job recebe o que o chamador conceder.
+# O guia de consumo lista o que conceder para cada funcionalidade.
 
 jobs:
   scan:
     name: DAST (${{ inputs.scan-type }})
     runs-on: ${{ inputs.runs-on }}
-    permissions:
-      contents: read
-      security-events: write
     outputs:
       findings: ${{ steps.findings.outputs.counts }}
     steps:

@@ -120,17 +120,16 @@ on:
         description: 'JSON com a contagem de achados de segurança por severidade.'
         value: ${{ jobs.security.outputs.findings }}
 
-permissions:
-  contents: read
+# Sem bloco `permissions` de propósito: em workflow reusável, o que é declarado aqui
+# vira exigência sobre quem chama — e pedir mais do que o chamador concedeu faz o run
+# falhar na largada, antes de criar job algum. Cada job recebe o que o chamador conceder.
+# O guia de consumo lista o que conceder para cada funcionalidade.
 
 jobs:
   # ===========================================================================
   build:
     name: Build & Test
     runs-on: ${{ inputs.runs-on }}
-    permissions:
-      contents: read
-      packages: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       artifact-name: ${{ steps.artifact.outputs.name }}
@@ -390,9 +389,6 @@ jobs:
   security:
     name: Segurança (SAST, segredos, dependências)
     runs-on: ${{ inputs.runs-on }}
-    permissions:
-      contents: read
-      security-events: write
     outputs:
       findings: ${{ steps.sast-findings.outputs.counts }}
     steps:
@@ -459,10 +455,6 @@ jobs:
     if: inputs.run-dast && inputs.build-container
     needs: build
     runs-on: ${{ inputs.runs-on }}
-    permissions:
-      contents: read
-      packages: read
-      security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
