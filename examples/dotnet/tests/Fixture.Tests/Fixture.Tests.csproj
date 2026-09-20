@@ -11,8 +11,10 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageReference Include="xunit" Version="2.9.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-    <!-- coverlet.collector é o que faz `--collect:"XPlat Code Coverage"` produzir o
-         coverage.cobertura.xml de onde o ci-dotnet.yml extrai a cobertura. -->
+    <!-- coverlet.collector é o que faz a coleta "XPlat Code Coverage" produzir o
+         coverage.cobertura.xml de onde o ci-dotnet.yml extrai a cobertura.
+         (Comentário XML não pode conter dois hifens seguidos, por isso a flag
+         do dotnet test não aparece escrita aqui.) -->
     <PackageReference Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
 

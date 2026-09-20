@@ -31,6 +31,26 @@ outputs:
 runs:
   using: composite
   steps:
+    # O Trivy aborta com "cannot find ignorefile" quando o caminho não existe, e a maioria
+    # dos repositórios não tem .trivyignore. Só passamos o arquivo quando ele existe.
+    - id: ignorefile
+      shell: bash
+      env:
+        CANDIDATOS: ${{ inputs.trivyignores }}
+      run: |
+        set -euo pipefail
+        existentes=()
+        for f in $CANDIDATOS; do
+          [ -f "$f" ] && existentes+=("$f")
+        done
+
+        if [ ${#existentes[@]} -eq 0 ]; then
+          echo "value=" >> "$GITHUB_OUTPUT"
+        else
+          printf 'value=%s\n' "$(IFS=,; echo "${existentes[*]}")" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Supressões do Trivy::usando ${existentes[*]}"
+        fi
+
     - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       with:
         scan-type: fs
@@ -39,7 +59,7 @@ runs:
         format: sarif
         output: ${{ inputs.output-file }}
         ignore-unfixed: ${{ inputs.ignore-unfixed }}
-        trivyignores: ${{ inputs.trivyignores }}
+        trivyignores: ${{ steps.ignorefile.outputs.value }}
         skip-dirs: ${{ inputs.skip-dirs }}
         # exit-code 0: o gate de severidade é do upload-findings, não da ferramenta.
         exit-code: '0'

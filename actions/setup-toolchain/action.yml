@@ -85,12 +85,37 @@ runs:
       shell: bash
       run: corepack enable
 
+    # O setup-node FALHA (não apenas avisa) quando cache-dependency-path não resolve.
+    # Projeto sem lockfile é comum, então decidimos antes se há o que cachear.
+    - id: node-cache
+      if: inputs.stack == 'node' || inputs.stack == 'react-ts'
+      shell: bash
+      env:
+        WD: ${{ inputs.working-directory }}
+        PM: ${{ inputs.package-manager }}
+      run: |
+        set -euo pipefail
+        case "$PM" in
+          pnpm) lock="$WD/pnpm-lock.yaml" ;;
+          yarn) lock="$WD/yarn.lock" ;;
+          *)    lock="$WD/package-lock.json" ;;
+        esac
+
+        if [ -f "$lock" ]; then
+          echo "manager=${PM:-npm}" >> "$GITHUB_OUTPUT"
+          echo "lockfile=$lock" >> "$GITHUB_OUTPUT"
+        else
+          echo "manager=" >> "$GITHUB_OUTPUT"
+          echo "lockfile=" >> "$GITHUB_OUTPUT"
+          echo "::warning title=Sem lockfile::Nenhum lockfile em '$WD'; cache de dependências desligado e o build não é reprodutível. Versione o lockfile do seu gerenciador."
+        fi
+
     - if: inputs.stack == 'node' || inputs.stack == 'react-ts'
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: ${{ steps.resolve.outputs.version }}
-        cache: ${{ inputs.package-manager != '' && inputs.package-manager || 'npm' }}
-        cache-dependency-path: ${{ inputs.working-directory }}/${{ (inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml') || (inputs.package-manager == 'yarn' && 'yarn.lock') || 'package-lock.json' }}
+        cache: ${{ steps.node-cache.outputs.manager }}
+        cache-dependency-path: ${{ steps.node-cache.outputs.lockfile }}
 
     # ------------------------------------------------------------------------- python
     - if: inputs.stack == 'python'
