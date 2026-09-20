@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tassosgomes/template-pipeline/platform.schema.json",
+  "title": "platform.yml",
+  "description": "Manifesto do serviço. Fica na raiz de cada repositório consumidor e é a fonte do catálogo de serviços e do workflow de auditoria da plataforma (Fase 2).",
+  "type": "object",
+  "required": ["nome", "time", "stack"],
+  "additionalProperties": false,
+  "properties": {
+    "nome": {
+      "type": "string",
+      "description": "Identificador do serviço, em kebab-case.",
+      "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+      "maxLength": 63
+    },
+    "descricao": {
+      "type": "string",
+      "description": "Uma linha sobre o que o serviço faz.",
+      "maxLength": 200
+    },
+    "time": {
+      "type": "string",
+      "description": "Time dono do serviço. Deve corresponder a um time da organização no GitHub."
+    },
+    "stack": {
+      "type": "string",
+      "description": "Stack do serviço. Determina qual workflow ci-*.yml da plataforma é usado.",
+      "enum": ["dotnet", "java", "go", "node", "python", "react-ts"]
+    },
+    "criticidade": {
+      "type": "string",
+      "description": "Criticidade de negócio. Governa o rigor esperado dos gates de segurança.",
+      "enum": ["baixa", "media", "alta", "critica"],
+      "default": "media"
+    },
+    "deploy": {
+      "type": "object",
+      "description": "Alvos de deploy por ambiente (consumido na Fase 3).",
+      "additionalProperties": false,
+      "properties": {
+        "plataforma": {
+          "type": "string",
+          "enum": ["vercel", "coolify", "aws", "azure", "gcp", "oci", "nenhum"]
+        },
+        "ambientes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["dev", "staging", "prod"]
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "seguranca": {
+      "type": "object",
+      "description": "Postura de segurança do serviço.",
+      "additionalProperties": false,
+      "properties": {
+        "modo": {
+          "type": "string",
+          "description": "observe reporta sem reprovar; enforce reprova conforme a severidade.",
+          "enum": ["observe", "enforce"],
+          "default": "observe"
+        },
+        "reprovar-a-partir-de": {
+          "type": "string",
+          "enum": ["none", "critical", "high", "medium", "low"],
+          "default": "high"
+        },
+        "dast": {
+          "type": "boolean",
+          "description": "Habilita o DAST. Exige aplicação containerizada com healthcheck.",
+          "default": false
+        }
+      }
+    },
+    "contato": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "slack": { "type": "string" },
+        "email": { "type": "string", "format": "email" }
+      }
+    }
+  }
+}

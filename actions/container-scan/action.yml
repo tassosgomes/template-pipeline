@@ -1,0 +1,75 @@
+name: 'Container Scan'
+description: 'Varre a imagem construída (vulnerabilidades) e os arquivos de configuração/IaC (misconfiguration) com Trivy.'
+
+inputs:
+  image-ref:
+    description: 'Referência da imagem a varrer. Vazio pula a varredura de imagem.'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Diretório com Dockerfile/IaC a verificar.'
+    required: false
+    default: '.'
+  output-file:
+    description: 'Caminho do SARIF consolidado, relativo ao workspace.'
+    required: false
+    default: 'container.sarif'
+  skip-dirs:
+    description: 'Diretórios a ignorar na varredura de configuração.'
+    required: false
+    default: '.platform'
+  scan-config:
+    description: 'Roda também a varredura de misconfiguration (Dockerfile, k8s, Terraform).'
+    required: false
+    default: 'true'
+
+outputs:
+  sarif-file:
+    description: 'Caminho do SARIF consolidado.'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: mkdir -p "${RUNNER_TEMP}/container-scan"
+
+    - if: inputs.image-ref != ''
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: image
+        image-ref: ${{ inputs.image-ref }}
+        scanners: vuln
+        format: sarif
+        output: ${{ runner.temp }}/container-scan/image.sarif
+        ignore-unfixed: 'true'
+        exit-code: '0'
+
+    - if: inputs.scan-config == 'true'
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: config
+        scan-ref: ${{ inputs.working-directory }}
+        format: sarif
+        output: ${{ runner.temp }}/container-scan/config.sarif
+        skip-dirs: ${{ inputs.skip-dirs }}
+        exit-code: '0'
+
+    - shell: bash
+      env:
+        OUT: ${{ inputs.output-file }}
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        files=("${RUNNER_TEMP}/container-scan"/*.sarif)
+
+        if [ ${#files[@]} -eq 0 ]; then
+          printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$OUT"
+          exit 0
+        fi
+
+        jq -s '{
+          version: "2.1.0",
+          "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+          runs: (map(.runs // []) | add // [])
+        }' "${files[@]}" > "$OUT"

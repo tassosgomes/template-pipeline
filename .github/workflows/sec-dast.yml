@@ -1,0 +1,114 @@
+name: Segurança · DAST
+
+# DAST contra um alvo JÁ IMPLANTADO. É o workflow consumido pelo CD (Fase 3) após o deploy
+# em dev/staging, e pelo agendamento noturno de full scan.
+#
+# ⚠️  full scan gera tráfego de ATAQUE REAL. Nunca aponte para produção sem autorização
+#     explícita e janela combinada (pesquisa §6.2).
+#
+#   jobs:
+#     dast:
+#       uses: tassosgomes/template-pipeline/.github/workflows/sec-dast.yml@v1
+#       permissions: { contents: read, security-events: write }
+#       with:
+#         target-url: https://staging.exemplo.com
+#         scan-type: baseline
+
+on:
+  workflow_call:
+    inputs:
+      target-url:
+        description: 'URL da aplicação em execução.'
+        type: string
+        required: true
+      scan-type:
+        description: 'baseline (passivo) | api (dirigido por OpenAPI) | full (ativo, lento).'
+        type: string
+        default: 'baseline'
+      openapi-spec:
+        description: 'URL ou caminho da spec OpenAPI. Obrigatório quando scan-type=api.'
+        type: string
+        default: ''
+      rules-file:
+        description: 'Arquivo de supressão do ZAP (rules.tsv) no repositório consumidor.'
+        type: string
+        default: ''
+      environment:
+        description: 'Ambiente alvo, apenas para rastreabilidade no job summary.'
+        type: string
+        default: ''
+      allow-production:
+        description: 'Confirmação explícita para apontar um full scan a produção.'
+        type: boolean
+        default: false
+      runs-on:
+        type: string
+        default: 'ubuntu-latest'
+      platform-ref:
+        type: string
+        default: 'v1'
+      security-fail-on:
+        type: string
+        default: 'high'
+      security-mode:
+        type: string
+        default: 'observe'
+    outputs:
+      findings:
+        description: 'JSON com a contagem de achados do DAST por severidade.'
+        value: ${{ jobs.scan.outputs.findings }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: DAST (${{ inputs.scan-type }})
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      findings: ${{ steps.findings.outputs.counts }}
+    steps:
+      - name: Guarda de produção
+        shell: bash
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          TARGET: ${{ inputs.target-url }}
+        run: |
+          set -euo pipefail
+          # Um full scan ativo contra produção é um incidente, não um teste. Exigimos
+          # confirmação explícita em vez de confiar em disciplina de quem configura.
+          looks_prod=false
+          case "${ENVIRONMENT,,}" in prod|producao|produção|production) looks_prod=true ;; esac
+          case "$TARGET" in *prod*) looks_prod=true ;; esac
+
+          if [ "$looks_prod" = true ] && [ "${{ inputs.scan-type }}" = "full" ] && [ "${{ inputs.allow-production }}" != "true" ]; then
+            echo "::error title=Full scan contra produção bloqueado::O alvo parece ser produção e scan-type=full gera tráfego de ataque real. Se isso é intencional e autorizado, passe allow-production: true."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - uses: ./.platform/actions/dast-zap
+        with:
+          target-url: ${{ inputs.target-url }}
+          scan-type: ${{ inputs.scan-type }}
+          openapi-spec: ${{ inputs.openapi-spec }}
+          rules-file: ${{ inputs.rules-file }}
+
+      - id: findings
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: dast.sarif
+          category: dast
+          tool-name: 'DAST · OWASP ZAP (${{ inputs.scan-type }})'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}

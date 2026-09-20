@@ -1,0 +1,114 @@
+# Regras próprias da plataforma.
+#
+# Motivo: ao construir a plataforma, medimos a cobertura dos rulesets OSS do Semgrep
+# (p/security-audit + p/owasp-top-ten) contra os fixtures de examples/. Python, Go, Java e
+# JavaScript são bem cobertos; C# e TypeScript/React ficaram com lacunas relevantes.
+# Estas regras fecham as lacunas que encontramos. Para C# e TS, o CodeQL agendado
+# (sec-codeql.yml) continua sendo a camada profunda.
+#
+# `security-severity` usa a escala CVSS, que é a mesma que o gate da plataforma lê
+# (actions/upload-findings/count-sarif.jq).
+
+rules:
+  # ----------------------------------------------------------------------- C#
+  - id: plataforma-csharp-hash-fraco
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      Algoritmo de hash criptograficamente quebrado (MD5/SHA1). Use SHA256 ou superior;
+      para senhas, use um KDF como PBKDF2, bcrypt ou Argon2.
+    metadata:
+      category: security
+      cwe: 'CWE-327: Use of a Broken or Risky Cryptographic Algorithm'
+      security-severity: '7.5'
+      confidence: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: MD5.Create()
+          - pattern: SHA1.Create()
+          - pattern: System.Security.Cryptography.MD5.Create()
+          - pattern: System.Security.Cryptography.SHA1.Create()
+          - pattern: new MD5CryptoServiceProvider()
+          - pattern: new SHA1CryptoServiceProvider()
+
+  - id: plataforma-csharp-sql-concatenado
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Query SQL montada por concatenação de string. Se qualquer parte vier do usuário,
+      isto é SQL injection. Use query parametrizada (SqlParameter) ou um ORM.
+    metadata:
+      category: security
+      cwe: 'CWE-89: Improper Neutralization of Special Elements used in an SQL Command'
+      owasp: 'A03:2021 - Injection'
+      security-severity: '8.8'
+      confidence: MEDIUM
+    patterns:
+      - pattern: $STR + $X
+      - metavariable-regex:
+          metavariable: $STR
+          regex: '(?i)"[^"]*\b(select|insert|update|delete)\b[^"]*"'
+
+  - id: plataforma-csharp-random-inseguro
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      System.Random não é criptograficamente seguro e não deve gerar token, senha,
+      nonce ou identificador de sessão. Use RandomNumberGenerator.
+    metadata:
+      category: security
+      cwe: 'CWE-338: Use of Cryptographically Weak PRNG'
+      security-severity: '5.3'
+      confidence: LOW
+    pattern: new Random()
+
+  # ------------------------------------------------------- TypeScript / React
+  - id: plataforma-react-dangerously-set-inner-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      dangerouslySetInnerHTML injeta HTML sem escapar. Se o conteúdo vier do usuário,
+      isto é XSS. Sanitize com DOMPurify antes, ou renderize como texto.
+    metadata:
+      category: security
+      cwe: 'CWE-79: Improper Neutralization of Input During Web Page Generation'
+      owasp: 'A03:2021 - Injection'
+      security-severity: '8.1'
+      confidence: MEDIUM
+    pattern: '<$EL ... dangerouslySetInnerHTML={$HTML} ... />'
+
+  - id: plataforma-ts-eval
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      eval() sobre valor dinâmico é execução de código arbitrário. Use JSON.parse para
+      dados, ou um mapa de funções permitidas.
+    metadata:
+      category: security
+      cwe: 'CWE-95: Eval Injection'
+      security-severity: '8.8'
+      confidence: MEDIUM
+    patterns:
+      - pattern: eval($X)
+      - pattern-not: eval("...")
+
+  # --------------------------------------------------------------------- Java
+  - id: plataforma-java-comando-concatenado
+    languages: [java]
+    severity: ERROR
+    message: >-
+      Comando de sistema montado a partir de valor dinâmico. Se qualquer parte vier do
+      usuário, isto é command injection. Passe os argumentos como array para o
+      ProcessBuilder, sem shell, e valide a entrada contra uma lista de permitidos.
+    metadata:
+      category: security
+      cwe: 'CWE-78: Improper Neutralization of Special Elements used in an OS Command'
+      owasp: 'A03:2021 - Injection'
+      security-severity: '8.8'
+      confidence: MEDIUM
+    patterns:
+      - pattern-either:
+          - pattern: Runtime.getRuntime().exec($X)
+          - pattern: new ProcessBuilder($X)
+      - pattern-not: Runtime.getRuntime().exec("...")
+      - pattern-not: new ProcessBuilder("...")

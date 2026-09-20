@@ -1,0 +1,26 @@
+# Saídas de build dos fixtures
+examples/*/dist/
+examples/*/build/
+examples/*/bin/
+examples/*/target/
+examples/*/publish/
+examples/*/node_modules/
+examples/*/TestResults/
+examples/*/coverage/
+examples/*/coverage.out
+examples/*/coverage.json
+examples/*/.coverage
+examples/*/*.egg-info/
+examples/*/.pytest_cache/
+examples/*/.ruff_cache/
+examples/**/__pycache__/
+examples/**/obj/
+
+# Checkout da própria plataforma feito pelos workflows reusáveis (ADR 0003)
+.platform/
+
+# Saídas dos scans
+*.sarif
+report_json.json
+report_md.md
+report_html.html

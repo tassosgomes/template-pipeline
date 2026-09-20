@@ -1,0 +1,117 @@
+name: Segurança · SAST
+
+# Camada de segurança isolada, para repositórios que já têm CI próprio ou que querem
+# rodar os scans em agendamento separado. Os workflows ci-*.yml já embutem estes passos;
+# chame este aqui apenas quando NÃO estiver usando um ci-*.yml da plataforma.
+#
+#   jobs:
+#     seguranca:
+#       uses: tassosgomes/template-pipeline/.github/workflows/sec-sast.yml@v1
+#       permissions: { contents: read, security-events: write }
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: '.'
+      stack:
+        description: 'Stack a analisar. Vazio detecta pelos manifestos do repositório.'
+        type: string
+        default: ''
+      runs-on:
+        type: string
+        default: 'ubuntu-latest'
+      platform-ref:
+        type: string
+        default: 'v1'
+      run-sast:
+        type: boolean
+        default: true
+      run-secret-scan:
+        type: boolean
+        default: true
+      run-dependency-scan:
+        type: boolean
+        default: true
+      security-fail-on:
+        type: string
+        default: 'high'
+      security-mode:
+        type: string
+        default: 'observe'
+    outputs:
+      findings:
+        description: 'JSON com a contagem de achados do SAST por severidade.'
+        value: ${{ jobs.scan.outputs.findings }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: SAST, segredos e dependências
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      findings: ${{ steps.sast-findings.outputs.counts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - id: stack
+        uses: ./.platform/actions/detect-stack
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: sast
+        if: inputs.run-sast
+        uses: ./.platform/actions/sast
+        with:
+          stack: ${{ inputs.stack != '' && inputs.stack || steps.stack.outputs.stack }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: sast-findings
+        if: inputs.run-sast
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: sast.sarif
+          category: sast
+          tool-name: 'SAST (Semgrep)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}
+
+      - if: inputs.run-secret-scan
+        uses: ./.platform/actions/secret-scan
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - if: inputs.run-secret-scan
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: gitleaks.sarif
+          category: secrets
+          tool-name: 'Segredos (gitleaks)'
+          severity-fail-on: low
+          mode: enforce
+
+      - if: inputs.run-dependency-scan
+        uses: ./.platform/actions/dependency-scan
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - if: inputs.run-dependency-scan
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: dependencies.sarif
+          category: dependencies
+          tool-name: 'Dependências (Trivy)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}

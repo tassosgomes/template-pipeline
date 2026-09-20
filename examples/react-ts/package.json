@@ -1,0 +1,19 @@
+{
+  "name": "fixture-react-ts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fixture React + TypeScript da plataforma.",
+  "type": "module",
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "test": "npm run build && node --test test/",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

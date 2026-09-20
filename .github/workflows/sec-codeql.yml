@@ -1,0 +1,112 @@
+name: Segurança · CodeQL
+
+# CodeQL é mais preciso que o Semgrep, mas construir o banco leva de minutos a dezenas de
+# minutos (pesquisa §6.1). Por isso ele roda em agendamento, e não no caminho do PR.
+#
+#   on:
+#     schedule: [{ cron: '0 3 * * *' }]
+#   jobs:
+#     codeql:
+#       uses: tassosgomes/template-pipeline/.github/workflows/sec-codeql.yml@v1
+#       permissions: { contents: read, security-events: write, actions: read }
+#       with:
+#         languages: '["javascript-typescript"]'
+
+on:
+  workflow_call:
+    inputs:
+      languages:
+        description: >
+          Lista JSON de linguagens do CodeQL. Vazio detecta pelos manifestos.
+          Valores: csharp, java, go, javascript-typescript, python.
+        type: string
+        default: ''
+      build-mode:
+        description: 'none (sem build) | autobuild | manual. Go, Java e C# podem exigir build.'
+        type: string
+        default: 'none'
+      working-directory:
+        type: string
+        default: '.'
+      runs-on:
+        type: string
+        default: 'ubuntu-latest'
+      platform-ref:
+        type: string
+        default: 'v1'
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolver linguagens
+    runs-on: ${{ inputs.runs-on }}
+    outputs:
+      languages: ${{ steps.langs.outputs.languages }}
+      empty: ${{ steps.langs.outputs.empty }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - id: stack
+        uses: ./.platform/actions/detect-stack
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: langs
+        shell: bash
+        env:
+          EXPLICIT: ${{ inputs.languages }}
+          DETECTED: ${{ steps.stack.outputs.codeql-language }}
+        run: |
+          set -euo pipefail
+          if [ -n "$EXPLICIT" ]; then
+            langs="$EXPLICIT"
+          elif [ -n "$DETECTED" ]; then
+            langs=$(jq -c -n --arg l "$DETECTED" '[$l]')
+          else
+            langs='[]'
+          fi
+
+          echo "languages=$langs" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$langs" | jq 'length')" -eq 0 ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            echo "::warning title=CodeQL sem linguagem::Nenhuma linguagem detectada nem informada; a análise foi pulada."
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    needs: resolve
+    if: needs.resolve.outputs.empty == 'false'
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(needs.resolve.outputs.languages) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ inputs.build-mode }}
+
+      - if: inputs.build-mode == 'autobuild'
+        uses: github/codeql-action/autobuild@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+
+      - uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        with:
+          category: codeql-${{ matrix.language }}

@@ -1,0 +1,50 @@
+name: 'Dependency Scan'
+description: 'Varredura de vulnerabilidades em dependências (SCA) com Trivy, cobrindo todos os ecossistemas da plataforma.'
+
+inputs:
+  working-directory:
+    description: 'Diretório a varrer.'
+    required: false
+    default: '.'
+  output-file:
+    description: 'Caminho do SARIF de saída, relativo ao workspace.'
+    required: false
+    default: 'dependencies.sarif'
+  ignore-unfixed:
+    description: 'Ignora vulnerabilidades que ainda não têm correção publicada.'
+    required: false
+    default: 'true'
+  skip-dirs:
+    description: 'Diretórios a ignorar. O default exclui o checkout da plataforma (ver ADR 0003).'
+    required: false
+    default: '.platform'
+  trivyignores:
+    description: 'Arquivo(s) .trivyignore do repositório consumidor.'
+    required: false
+    default: '.trivyignore'
+
+outputs:
+  sarif-file:
+    description: 'Caminho do SARIF gerado.'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        scan-type: fs
+        scan-ref: ${{ inputs.working-directory }}
+        scanners: vuln
+        format: sarif
+        output: ${{ inputs.output-file }}
+        ignore-unfixed: ${{ inputs.ignore-unfixed }}
+        trivyignores: ${{ inputs.trivyignores }}
+        skip-dirs: ${{ inputs.skip-dirs }}
+        # exit-code 0: o gate de severidade é do upload-findings, não da ferramenta.
+        exit-code: '0'
+
+    - shell: bash
+      run: |
+        set -euo pipefail
+        [ -f "${{ inputs.output-file }}" ] || printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "${{ inputs.output-file }}"

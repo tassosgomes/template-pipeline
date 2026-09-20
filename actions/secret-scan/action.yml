@@ -1,0 +1,93 @@
+name: 'Secret Scan'
+description: >
+  Varre o código em busca de segredos com a CLI oficial do gitleaks (MIT).
+  Usamos a CLI, e não a gitleaks-action, porque esta última exige license key
+  para repositórios de organização desde a v2.
+
+inputs:
+  working-directory:
+    description: 'Diretório a varrer.'
+    required: false
+    default: '.'
+  output-file:
+    description: 'Caminho do SARIF de saída, relativo ao workspace.'
+    required: false
+    default: 'gitleaks.sarif'
+  exclude-paths:
+    description: >
+      Regexes de caminho a ignorar, um por linha. O default exclui o checkout da própria
+      plataforma (ver ADR 0003).
+    required: false
+    default: '^\.platform/'
+  baseline-path:
+    description: 'Arquivo de baseline com achados já triados e aceitos.'
+    required: false
+    default: ''
+
+outputs:
+  sarif-file:
+    description: 'Caminho do SARIF gerado.'
+    value: ${{ inputs.output-file }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GITLEAKS_VERSION: '8.30.1'
+        WD: ${{ inputs.working-directory }}
+        OUT: ${{ inputs.output-file }}
+        BASELINE: ${{ inputs.baseline-path }}
+        EXCLUDES: ${{ inputs.exclude-paths }}
+      run: |
+        set -euo pipefail
+
+        tmp="${RUNNER_TEMP}/gitleaks"
+        mkdir -p "$tmp"
+
+        tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+
+        curl -sSfL "${base}/${tarball}" -o "${tmp}/${tarball}"
+
+        # Verifica a integridade contra o arquivo de checksums do próprio release.
+        if curl -sSfL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o "${tmp}/checksums.txt"; then
+          ( cd "$tmp" && grep " ${tarball}\$" checksums.txt | sha256sum -c - )
+          echo "Checksum do gitleaks conferido."
+        else
+          echo "::warning title=Checksum indisponível::Não foi possível baixar o arquivo de checksums do gitleaks; prosseguindo sem verificação."
+        fi
+
+        tar -xzf "${tmp}/${tarball}" -C "$tmp" gitleaks
+        chmod +x "${tmp}/gitleaks"
+
+        args=(dir "$WD" --report-format sarif --report-path "$OUT" --exit-code 0 --no-banner)
+
+        # A partir da v8.25 o gitleaks usa [[allowlists]]; `useDefault` mantém o
+        # conjunto de regras padrão e só acrescenta a exclusão de caminhos.
+        if [ -n "${EXCLUDES// }" ]; then
+          cfg="${tmp}/gitleaks.toml"
+          {
+            echo 'title = "plataforma"'
+            echo '[extend]'
+            echo 'useDefault = true'
+            echo '[[allowlists]]'
+            echo 'description = "caminhos excluidos pela plataforma"'
+            echo 'paths = ['
+            while IFS= read -r pat; do
+              [ -z "${pat// }" ] && continue
+              printf "  '''%s''',\n" "$pat"
+            done <<< "$EXCLUDES"
+            echo ']'
+          } > "$cfg"
+          args+=(--config "$cfg")
+        fi
+        if [ -n "$BASELINE" ] && [ -f "$BASELINE" ]; then
+          args+=(--baseline-path "$BASELINE")
+          echo "::notice title=Baseline de segredos::Usando '$BASELINE'."
+        fi
+
+        # --exit-code 0: quem decide reprovar é o gate da plataforma, não a ferramenta.
+        "${tmp}/gitleaks" "${args[@]}"
+
+        [ -f "$OUT" ] || printf '%s' '{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}' > "$OUT"

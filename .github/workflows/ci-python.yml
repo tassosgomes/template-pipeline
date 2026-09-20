@@ -1,0 +1,453 @@
+name: CI · Python
+
+# Workflow reusável da plataforma. Contrato idêntico ao das demais stacks (ver ADR 0002).
+# Consumo:
+#   jobs:
+#     ci:
+#       uses: tassosgomes/template-pipeline/.github/workflows/ci-python.yml@v1
+#       with: { version: "3.12", coverage-threshold: 70 }
+
+on:
+  workflow_call:
+    inputs:
+      # ---------------------------------------------------------------- básico
+      working-directory:
+        description: 'Diretório do projeto dentro do repositório.'
+        type: string
+        default: '.'
+      version:
+        description: 'Versão do Python. Vazio usa o default da plataforma.'
+        type: string
+        default: ''
+      runs-on:
+        description: 'Runner a usar.'
+        type: string
+        default: 'ubuntu-latest'
+      platform-ref:
+        description: 'Ref da plataforma a carregar (tag, branch ou SHA). Ver ADR 0003.'
+        type: string
+        default: 'v1'
+
+      # ------------------------------------------------------------ qualidade
+      run-lint:
+        type: boolean
+        default: true
+      run-tests:
+        type: boolean
+        default: true
+      coverage-threshold:
+        description: 'Cobertura mínima em percentual. 0 desliga o gate.'
+        type: number
+        default: 0
+      lint-args:
+        description: 'Argumentos extras repassados ao lint (ver ADR 0002).'
+        type: string
+        default: ''
+      test-args:
+        description: 'Argumentos extras repassados aos testes.'
+        type: string
+        default: ''
+      build-args:
+        description: 'Argumentos extras repassados ao build.'
+        type: string
+        default: ''
+
+      # -------------------------------------------------------------- empacote
+      build-container:
+        type: boolean
+        default: false
+      image-name:
+        description: 'Nome da imagem no GHCR. Vazio usa o nome do repositório.'
+        type: string
+        default: ''
+      upload-artifact:
+        type: boolean
+        default: true
+
+      # ------------------------------------------------------------- segurança
+      run-sast:
+        type: boolean
+        default: true
+      run-secret-scan:
+        type: boolean
+        default: true
+      run-dependency-scan:
+        type: boolean
+        default: true
+      security-fail-on:
+        description: 'none | critical | high | medium | low'
+        type: string
+        default: 'high'
+      security-mode:
+        description: 'observe (só reporta) | enforce (reprova o job).'
+        type: string
+        default: 'observe'
+      run-dast:
+        description: 'DAST efêmero no PR. Exige build-container: true.'
+        type: boolean
+        default: false
+      dast-port:
+        type: number
+        default: 8080
+      dast-health-path:
+        type: string
+        default: '/health'
+      dast-openapi-spec:
+        description: 'Spec OpenAPI. Preenchido, troca o baseline pelo api-scan.'
+        type: string
+        default: ''
+
+    outputs:
+      version:
+        description: 'Versão calculada do artefato.'
+        value: ${{ jobs.build.outputs.version }}
+      artifact-name:
+        description: 'Nome do artifact publicado.'
+        value: ${{ jobs.build.outputs.artifact-name }}
+      image-digest:
+        description: 'Digest imutável da imagem publicada. Consumido pelo CD.'
+        value: ${{ jobs.build.outputs.image-digest }}
+      coverage:
+        description: 'Cobertura de testes apurada, em percentual.'
+        value: ${{ jobs.build.outputs.coverage }}
+      findings:
+        description: 'JSON com a contagem de achados de segurança por severidade.'
+        value: ${{ jobs.security.outputs.findings }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  build:
+    name: Build & Test
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      artifact-name: ${{ steps.artifact.outputs.name }}
+      image-digest: ${{ steps.image.outputs.digest }}
+      image-ref: ${{ steps.image-name.outputs.ref }}
+      coverage: ${{ steps.coverage.outputs.pct }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - id: stack
+        uses: ./.platform/actions/detect-stack
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: toolchain
+        uses: ./.platform/actions/setup-toolchain
+        with:
+          stack: python
+          version: ${{ inputs.version }}
+          package-manager: ${{ steps.stack.outputs.package-manager }}
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Tag vira a versão do artefato; qualquer outra ref usa o SHA curto.
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            v="${GITHUB_REF#refs/tags/}"
+          else
+            v="$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "::notice title=Versão::$v"
+
+      - name: Instalar dependências
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        env:
+          PM: ${{ steps.stack.outputs.package-manager }}
+        run: |
+          set -euo pipefail
+          case "$PM" in
+            uv)     uv sync --all-extras --dev ;;
+            poetry)
+              python -m pip install --quiet --disable-pip-version-check poetry
+              poetry install --no-interaction
+              ;;
+            *)
+              python -m pip install --quiet --upgrade pip
+              if [ -f requirements.txt ]; then
+                pip install -r requirements.txt
+              elif [ -f pyproject.toml ]; then
+                pip install -e '.[dev]' || pip install -e .
+              fi
+              pip install --quiet pytest pytest-cov ruff
+              ;;
+          esac
+
+      - name: Lint (ruff)
+        if: inputs.run-lint
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        env:
+          PM: ${{ steps.stack.outputs.package-manager }}
+          EXTRA_ARGS: ${{ inputs.lint-args }}
+        run: |
+          set -euo pipefail
+          run_py() { if [ "$PM" = "uv" ]; then uv run "$@"; elif [ "$PM" = "poetry" ]; then poetry run "$@"; else "$@"; fi; }
+          # shellcheck disable=SC2086
+          run_py ruff check . $EXTRA_ARGS
+          run_py ruff format --check .
+
+      - name: Testes
+        if: inputs.run-tests
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        env:
+          PM: ${{ steps.stack.outputs.package-manager }}
+          EXTRA_ARGS: ${{ inputs.test-args }}
+        run: |
+          set -euo pipefail
+          run_py() { if [ "$PM" = "uv" ]; then uv run "$@"; elif [ "$PM" = "poetry" ]; then poetry run "$@"; else "$@"; fi; }
+          # shellcheck disable=SC2086
+          run_py pytest --cov --cov-report=json --cov-report=term $EXTRA_ARGS
+
+      - id: coverage
+        if: inputs.run-tests
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        env:
+          THRESHOLD: ${{ inputs.coverage-threshold }}
+        run: |
+          set -euo pipefail
+          pct=""
+          [ -f coverage.json ] && pct=$(jq -r '.totals.percent_covered // empty' coverage.json)
+
+          if [ -z "$pct" ]; then
+            echo "::notice title=Cobertura não apurada::coverage.json não foi gerado (pytest-cov com --cov-report=json)."
+            echo "pct=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pct=$(awk "BEGIN{printf \"%.2f\", $pct}")
+          echo "pct=$pct" >> "$GITHUB_OUTPUT"
+          if [ "$THRESHOLD" != "0" ] && awk "BEGIN{exit !($pct < $THRESHOLD)}"; then
+            echo "::error title=Cobertura abaixo do mínimo::${pct}% < ${THRESHOLD}%"
+            exit 1
+          fi
+          echo "::notice title=Cobertura::${pct}%"
+
+      - name: Build (wheel/sdist)
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        env:
+          EXTRA_ARGS: ${{ inputs.build-args }}
+        run: |
+          set -euo pipefail
+          if [ ! -f pyproject.toml ]; then
+            echo "::notice title=Build pulado::Sem pyproject.toml, não há pacote a construir."
+            exit 0
+          fi
+          python -m pip install --quiet build
+          # shellcheck disable=SC2086
+          python -m build $EXTRA_ARGS
+
+      - id: artifact
+        if: inputs.upload-artifact
+        shell: bash
+        run: echo "name=build-python-${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+      - if: inputs.upload-artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.artifact.outputs.name }}
+          path: |
+            ${{ inputs.working-directory }}/dist
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # ------------------------------------------------------------- container
+      - if: inputs.build-container
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - if: inputs.build-container
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: image-name
+        if: inputs.build-container
+        shell: bash
+        run: |
+          set -euo pipefail
+          name='${{ inputs.image-name }}'
+          [ -z "$name" ] && name="${GITHUB_REPOSITORY##*/}"
+          # O GHCR exige o caminho em minúsculas.
+          echo "ref=ghcr.io/$(echo "${GITHUB_REPOSITORY_OWNER}/${name}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - id: image
+        if: inputs.build-container
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ inputs.working-directory }}
+          push: true
+          tags: |
+            ${{ steps.image-name.outputs.ref }}:${{ steps.version.outputs.version }}
+            ${{ steps.image-name.outputs.ref }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - if: inputs.build-container
+        uses: ./.platform/actions/container-scan
+        with:
+          image-ref: ${{ steps.image-name.outputs.ref }}@${{ steps.image.outputs.digest }}
+          working-directory: ${{ inputs.working-directory }}
+          output-file: container.sarif
+
+      - if: inputs.build-container
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: container.sarif
+          category: container
+          tool-name: 'Trivy (imagem e configuração)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}
+
+      - uses: ./.platform/actions/sbom
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          artifact-name: sbom-python-${{ steps.version.outputs.version }}
+
+      - uses: ./.platform/actions/job-summary
+        if: always()
+        with:
+          stack: python
+          version: ${{ steps.toolchain.outputs.resolved-version }}
+          build-version: ${{ steps.version.outputs.version }}
+          coverage: ${{ steps.coverage.outputs.pct }}
+          coverage-threshold: ${{ inputs.coverage-threshold }}
+          artifact-name: ${{ steps.artifact.outputs.name }}
+          image-digest: ${{ steps.image.outputs.digest }}
+
+  # ===========================================================================
+  # Roda em paralelo com o build para não somar ao tempo de feedback do PR.
+  security:
+    name: Segurança (SAST, segredos, dependências)
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      findings: ${{ steps.sast-findings.outputs.counts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - id: sast
+        if: inputs.run-sast
+        uses: ./.platform/actions/sast
+        with:
+          stack: python
+          working-directory: ${{ inputs.working-directory }}
+
+      - id: sast-findings
+        if: inputs.run-sast
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: sast.sarif
+          category: sast
+          tool-name: 'SAST (Semgrep)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}
+
+      - if: inputs.run-secret-scan
+        uses: ./.platform/actions/secret-scan
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - if: inputs.run-secret-scan
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: gitleaks.sarif
+          category: secrets
+          tool-name: 'Segredos (gitleaks)'
+          # Segredo vazado não admite modo observação: é sempre bloqueante.
+          severity-fail-on: low
+          mode: enforce
+
+      - if: inputs.run-dependency-scan
+        uses: ./.platform/actions/dependency-scan
+        with:
+          working-directory: ${{ inputs.working-directory }}
+
+      - if: inputs.run-dependency-scan
+        uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: dependencies.sarif
+          category: dependencies
+          tool-name: 'Dependências (Trivy)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}
+
+  # ===========================================================================
+  dast:
+    name: DAST efêmero
+    if: inputs.run-dast && inputs.build-container
+    needs: build
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: target
+        uses: ./.platform/actions/ephemeral-app
+        with:
+          image-ref: ${{ needs.build.outputs.image-ref }}@${{ needs.build.outputs.image-digest }}
+          port: ${{ inputs.dast-port }}
+          health-path: ${{ inputs.dast-health-path }}
+
+      - uses: ./.platform/actions/dast-zap
+        with:
+          target-url: ${{ steps.target.outputs.base-url }}
+          scan-type: ${{ inputs.dast-openapi-spec != '' && 'api' || 'baseline' }}
+          openapi-spec: ${{ inputs.dast-openapi-spec }}
+
+      - uses: ./.platform/actions/upload-findings
+        with:
+          sarif-file: dast.sarif
+          category: dast
+          tool-name: 'DAST (OWASP ZAP)'
+          severity-fail-on: ${{ inputs.security-fail-on }}
+          mode: ${{ inputs.security-mode }}
+
+      # Derruba o alvo mesmo quando o scan falha, para não vazar container entre execuções.
+      - if: always()
+        shell: bash
+        run: docker rm -f "${{ steps.target.outputs.container-name }}" || true

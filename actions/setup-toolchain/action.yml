@@ -1,0 +1,105 @@
+name: 'Setup Toolchain'
+description: 'Instala a toolchain e configura o cache de dependências da stack, atrás de uma interface única.'
+
+inputs:
+  stack:
+    description: 'dotnet | java | go | node | react-ts | python'
+    required: true
+  version:
+    description: 'Versão da linguagem. Vazio usa o default da plataforma para a stack.'
+    required: false
+    default: ''
+  package-manager:
+    description: 'Gerenciador detectado pelo detect-stack (npm | pnpm | yarn | maven | gradle | uv | poetry | pip | ...).'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Diretório do projeto.'
+    required: false
+    default: '.'
+
+outputs:
+  resolved-version:
+    description: 'Versão efetivamente aplicada.'
+    value: ${{ steps.resolve.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    # Defaults da plataforma ficam em um lugar só: mudar aqui muda para todos os repositórios.
+    - id: resolve
+      shell: bash
+      run: |
+        set -euo pipefail
+        v="${{ inputs.version }}"
+        if [ -z "$v" ]; then
+          case "${{ inputs.stack }}" in
+            dotnet)         v="8.0.x" ;;
+            java)           v="21"    ;;
+            go)             v="1.23"  ;;
+            node|react-ts)  v="22"    ;;
+            python)         v="3.12"  ;;
+            *)
+              echo "::error title=Stack desconhecida::'${{ inputs.stack }}' não é suportada pela plataforma."
+              exit 1
+              ;;
+          esac
+          echo "::notice title=Versão default::${{ inputs.stack }} sem 'version' informada; usando o default da plataforma ($v)."
+        fi
+        echo "version=$v" >> "$GITHUB_OUTPUT"
+
+    # ------------------------------------------------------------------------- dotnet
+    - if: inputs.stack == 'dotnet'
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      with:
+        dotnet-version: ${{ steps.resolve.outputs.version }}
+
+    # O cache nativo do setup-dotnet exige packages.lock.json, que a maioria dos projetos
+    # não versiona. Cacheamos o diretório global do NuGet, chaveado pelos arquivos de projeto.
+    - if: inputs.stack == 'dotnet'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.nuget/packages
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.fsproj', '**/Directory.Packages.props', '**/packages.lock.json') }}
+        restore-keys: |
+          nuget-${{ runner.os }}-
+
+    # --------------------------------------------------------------------------- java
+    - if: inputs.stack == 'java'
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        java-version: ${{ steps.resolve.outputs.version }}
+        cache: ${{ inputs.package-manager == 'gradle' && 'gradle' || 'maven' }}
+
+    # ----------------------------------------------------------------------------- go
+    - if: inputs.stack == 'go'
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: ${{ steps.resolve.outputs.version }}
+        cache-dependency-path: ${{ inputs.working-directory }}/go.sum
+
+    # ------------------------------------------------------------------- node / react
+    # corepack precisa vir antes do setup-node para que o cache de pnpm/yarn resolva o binário.
+    - if: (inputs.stack == 'node' || inputs.stack == 'react-ts') && (inputs.package-manager == 'pnpm' || inputs.package-manager == 'yarn')
+      shell: bash
+      run: corepack enable
+
+    - if: inputs.stack == 'node' || inputs.stack == 'react-ts'
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ steps.resolve.outputs.version }}
+        cache: ${{ inputs.package-manager != '' && inputs.package-manager || 'npm' }}
+        cache-dependency-path: ${{ inputs.working-directory }}/${{ (inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml') || (inputs.package-manager == 'yarn' && 'yarn.lock') || 'package-lock.json' }}
+
+    # ------------------------------------------------------------------------- python
+    - if: inputs.stack == 'python'
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ steps.resolve.outputs.version }}
+        cache: ${{ inputs.package-manager == 'uv' && '' || 'pip' }}
+
+    - if: inputs.stack == 'python' && inputs.package-manager == 'uv'
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      with:
+        enable-cache: true
