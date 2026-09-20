@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "lint": "tsc --noEmit",
-    "test": "npm run build && node --test test/",
+    "test": "npm run build && node --test",
     "build": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
