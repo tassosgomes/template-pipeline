@@ -1,0 +1,18 @@
+nome: identity
+descricao: Serviço de identidade e autenticação.
+time: identity
+stack: dotnet
+criticidade: alta
+deploy:
+  plataforma: coolify
+  ambientes:
+    - dev
+    - staging
+    - prod
+seguranca:
+  modo: enforce
+  reprovar-a-partir-de: high
+  dast: true
+contato:
+  slack: "#team-identity"
+  email: identity@example.com

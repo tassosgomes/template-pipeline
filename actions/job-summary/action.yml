@@ -13,6 +13,14 @@ inputs:
     description: 'Versão calculada do artefato.'
     required: false
     default: ''
+  service-name:
+    description: 'Identidade do serviço, quando o pipeline é executado em monorepo.'
+    required: false
+    default: ''
+  test-configuration:
+    description: 'Configuração de testes solicitada.'
+    required: false
+    default: 'Release'
   coverage:
     description: 'Cobertura de testes em percentual, se apurada.'
     required: false
@@ -29,6 +37,10 @@ inputs:
     description: 'Digest da imagem publicada.'
     required: false
     default: ''
+  image-ref:
+    description: 'Nome completo da imagem, sem tag ou digest.'
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -38,9 +50,12 @@ runs:
         STACK: ${{ inputs.stack }}
         TOOLCHAIN: ${{ inputs.version }}
         BUILD_VERSION: ${{ inputs.build-version }}
+        SERVICE: ${{ inputs.service-name }}
+        TEST_CONFIGURATION: ${{ inputs.test-configuration }}
         COVERAGE: ${{ inputs.coverage }}
         THRESHOLD: ${{ inputs.coverage-threshold }}
         ARTIFACT: ${{ inputs.artifact-name }}
+        IMAGE_REF: ${{ inputs.image-ref }}
         DIGEST: ${{ inputs.image-digest }}
       run: |
         set -euo pipefail
@@ -53,9 +68,12 @@ runs:
           echo "| | |"
           echo "|---|---|"
           row "Toolchain"  "$TOOLCHAIN"
+          row "Serviço"    "$SERVICE"
           row "Versão"     "\`${BUILD_VERSION}\`"
+          row "Configuração de testes" "$TEST_CONFIGURATION"
           row "Artifact"   "$ARTIFACT"
-          row "Imagem"     "\`${DIGEST}\`"
+          row "Imagem"     "\`${IMAGE_REF}\`"
+          row "Digest"     "\`${DIGEST}\`"
         } >> "$GITHUB_STEP_SUMMARY"
 
         if [ -n "$COVERAGE" ]; then

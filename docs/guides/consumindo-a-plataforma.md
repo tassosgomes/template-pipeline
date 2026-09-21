@@ -26,6 +26,7 @@ jobs:
       security-events: write   # ver a matriz de permissões abaixo
     with:
       version: '22'
+      service-name: web
       coverage-threshold: 70
 ```
 
@@ -95,11 +96,15 @@ with: { version: '22', coverage-threshold: 70 }
 | Input | Tipo | Default | O que faz |
 |---|---|---|---|
 | `working-directory` | string | `.` | Diretório do projeto (útil em monorepo) |
+| `service-name` | string | `''` | Nome estável do serviço; também pode ser derivado de `serviço/vMAJOR.MINOR.PATCH` |
+| `docker-context` | string | `''` | Contexto Docker relativo à raiz; vazio usa `working-directory` |
+| `dockerfile` | string | `''` | Dockerfile relativo à raiz; vazio usa `working-directory/Dockerfile` |
 | `version` | string | *(por stack)* | Versão da linguagem. Vazio usa o default da plataforma |
 | `runs-on` | string | `ubuntu-latest` | Runner |
 | `platform-ref` | string | `v1` | Versão da plataforma a carregar (ADR 0003) |
 | `run-lint` | boolean | `true` | |
 | `run-tests` | boolean | `true` | |
+| `test-configuration` | string | `Release` | Configuração passada ao teste .NET; nas outras stacks é registrada como no-op explícito |
 | `coverage-threshold` | number | `0` | Cobertura mínima. `0` desliga o gate |
 | `lint-args` / `test-args` / `build-args` | string | `''` | Argumentos extras para a ferramenta nativa |
 | `build-container` | boolean | `false` | Constrói e publica imagem no GHCR |
@@ -120,8 +125,10 @@ with: { version: '22', coverage-threshold: 70 }
 
 | Output | Para que serve |
 |---|---|
+| `service-name` | Identidade estável do serviço, útil para monorepo e imagem |
 | `version` | Versão do artefato (tag, ou SHA curto fora de tag) |
 | `artifact-name` | Nome do artifact publicado |
+| `image-ref` | Repositório da imagem sem tag/digest |
 | `image-digest` | Digest imutável da imagem. **É o que o CD consome** |
 | `coverage` | Cobertura apurada, em percentual |
 | `findings` | JSON com a contagem de achados de segurança por severidade |
@@ -133,11 +140,24 @@ Sem ele, o passo emite um aviso e segue — não reprova.
 
 | Stack | Arquivo lido | Como habilitar |
 |---|---|---|
-| dotnet | `TestResults/**/coverage.cobertura.xml` | pacote `coverlet.collector` no projeto de testes |
+| dotnet | XML Cobertura com `<coverage>` | pacote `coverlet.collector` ou Microsoft.Testing.Platform com cobertura habilitada |
 | java | `**/jacoco/jacoco.csv` | plugin `jacoco-maven-plugin` com o goal `report` |
 | go | `coverage.out` | automático |
 | node / react-ts | `coverage/coverage-summary.json` | reporter `json-summary` no jest/vitest |
 | python | `coverage.json` | `pytest-cov` (a plataforma já passa `--cov-report=json`) |
+
+### .NET e `global.json`
+
+Quando `version` fica vazio, `setup-toolchain` procura `global.json` no diretório do serviço e
+em seus ancestrais. `sdk.version`, `sdk.rollForward` e `test.runner` são validados; o default sem
+esse arquivo é `.NET 10` (`10.0.x`). Com `test.runner: Microsoft.Testing.Platform`, a pipeline usa
+`--coverage --coverage-output-format cobertura`; sem ele preserva o caminho VSTest/
+`coverlet.collector`. Um `version` explícito continua sendo a seleção de instalação do workflow,
+mas o `global.json` continua sendo a política que o CLI .NET usa ao executar no diretório do
+projeto — mantenha ambos coerentes.
+
+Para ArchitectureTests, chame a pipeline com `test-configuration: Debug`; o input é aplicado uma
+única vez no comando `dotnet test`.
 
 ## Monorepo
 
@@ -147,7 +167,11 @@ Um job por serviço, cada um com seu `working-directory`:
 jobs:
   api:
     uses: tassosgomes/template-pipeline/.github/workflows/ci-go.yml@v1
-    with: { working-directory: services/api }
+    with:
+      working-directory: services/api
+      service-name: api
+      docker-context: .
+      dockerfile: services/api/Dockerfile
 
   web:
     uses: tassosgomes/template-pipeline/.github/workflows/ci-react-ts.yml@v1

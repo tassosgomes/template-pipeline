@@ -1,0 +1,54 @@
+name: Contract · OpenAPI lint
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: 'Diretório do serviço no repositório chamador.'
+        type: string
+        required: false
+        default: '.'
+      spec-glob:
+        description: 'Glob dos arquivos OpenAPI relativo à raiz do repositório.'
+        type: string
+        required: false
+        default: '**/openapi*.{yaml,yml,json}'
+      platform-ref:
+        description: 'Ref da plataforma que contém a action e o ruleset.'
+        type: string
+        required: false
+        default: 'v1'
+      fail-severity:
+        description: 'Severidade mínima que reprova: info | warn | error.'
+        type: string
+        required: false
+        default: 'error'
+      output-format:
+        description: 'Formato de saída do Spectral.'
+        type: string
+        required: false
+        default: 'stylish'
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Spectral
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - uses: ./.platform/actions/openapi-lint
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          spec-glob: ${{ inputs.spec-glob }}
+          ruleset: .platform/rulesets/openapi.yaml
+          fail-severity: ${{ inputs.fail-severity }}
+          output-format: ${{ inputs.output-format }}

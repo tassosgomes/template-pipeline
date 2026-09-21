@@ -1,0 +1,2 @@
+GET /v1/widgets
+Widget.id: string

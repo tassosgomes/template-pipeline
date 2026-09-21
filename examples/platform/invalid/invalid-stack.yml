@@ -1,0 +1,7 @@
+defaults:
+  time: platform
+
+servicos:
+  - nome: identity
+    path: apps/identity
+    stack: rust

@@ -15,7 +15,10 @@ Os seis reusable workflows `ci-*.yml` expõem **exatamente a mesma interface** �
 input, mesmos defaults, mesmos outputs. Diferenças de linguagem ficam **contidas dentro** do
 workflow, nunca vazam para o contrato.
 
-O que varia entre stacks é apenas o valor do input `version` e as ferramentas internas.
+O que varia entre stacks é apenas o valor do input `version` e as ferramentas internas. O
+contrato também separa o diretório do projeto do contexto Docker (`docker-context`/`dockerfile`),
+expõe `test-configuration` para cenários como ArchitectureTests e identifica explicitamente o
+serviço quando a pipeline roda em um monorepo (`service-name`).
 
 ## Justificativa
 
@@ -42,3 +45,6 @@ expressividade sem poluir o contrato das outras.
 Adicionar input ao contrato exige adicioná-lo **aos seis workflows**, ainda que como no-op em
 alguns. Divergência de contrato é tratada como bug, e o `_selftest.yml` verifica isso
 automaticamente comparando os blocos `workflow_call` dos seis arquivos.
+
+Os outputs de imagem seguem a mesma regra: `image-digest` é a identidade imutável consumida pelo
+CD; `image-ref` e `service` servem para rastreabilidade e não substituem o digest.

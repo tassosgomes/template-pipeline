@@ -1,0 +1,131 @@
+# Ruleset versioned with the platform and based on the approved code-for-coders ruleset:
+# https://github.com/tassosgomes/code-for-coders/blob/main/.agents/skills/tsg-flow-contract-creator/rulesets/openapi.yaml
+# The service repository opts into this vendored copy via openapi-lint.yml.
+extends: spectral:oas
+
+rules:
+  openapi-version:
+    description: OpenAPI 3.1 is the platform contract.
+    given: $
+    severity: error
+    then:
+      field: openapi
+      function: pattern
+      functionOptions:
+        match: '^3\.1\.\d+$'
+
+  info-title-required:
+    given: $.info
+    severity: error
+    then:
+      field: title
+      function: truthy
+
+  info-version-required:
+    given: $.info
+    severity: error
+    then:
+      field: version
+      function: truthy
+
+  path-kebab-case:
+    description: Resource path segments use lowercase kebab-case.
+    given: '$.paths[*]~'
+    severity: error
+    then:
+      function: pattern
+      functionOptions:
+        match: '^(/[a-z0-9]+(?:-[a-z0-9]+)*|/\{[a-zA-Z][a-zA-Z0-9]*\})(/[a-z0-9]+(?:-[a-z0-9]+)*|/\{[a-zA-Z][a-zA-Z0-9]*\})*$'
+
+  operation-id-required:
+    given: '$.paths[*][get,put,post,delete,options,head,patch,trace]'
+    severity: error
+    then:
+      field: operationId
+      function: truthy
+
+  operation-security-required:
+    description: Every operation must declare security explicitly.
+    given: '$.paths[*][get,put,post,delete,options,head,patch,trace]'
+    severity: error
+    then:
+      field: security
+      function: defined
+
+  json-success-response:
+    given: '$.paths[*][get,put,post,delete,options,head,patch,trace].responses[*]'
+    severity: error
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          type: object
+          required: [description]
+
+  no-deprecated:
+    given: '$..deprecated'
+    severity: error
+    then:
+      function: falsy
+
+  api-must-be-versioned:
+    description: A major API version must appear in servers or every path.
+    given: $
+    severity: error
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          anyOf:
+            - type: object
+              required: [servers]
+              properties:
+                servers:
+                  type: array
+                  contains:
+                    type: object
+                    required: [url]
+                    properties:
+                      url:
+                        type: string
+                        pattern: '/v[0-9]+(/|$)'
+            - type: object
+              required: [paths]
+              properties:
+                paths:
+                  type: object
+                  propertyNames:
+                    pattern: '/v[0-9]+(/|$)'
+
+  json-content-types-only:
+    description: Request and response bodies use JSON media types.
+    given:
+      - '$.paths[*][*].requestBody.content'
+      - '$.paths[*][*].responses[*].content'
+    severity: error
+    then:
+      function: enumeration
+      field: '@key'
+      functionOptions:
+        values: [application/json, application/problem+json]
+
+  error-responses-use-problem-details:
+    description: 4xx and 5xx responses use RFC 9457 media type.
+    given: '$.paths[*][*].responses[?(@property.match(/^[45]/))].content'
+    severity: error
+    then:
+      field: application/problem+json
+      function: truthy
+
+  schema-example-keyword:
+    description: Schema Objects use JSON Schema examples arrays, not example.
+    given:
+      - '$.components.schemas..[?(@ && @.example !== void 0)]'
+      - '$.paths[*][*]..schema[?(@ && @.example !== void 0)]'
+    severity: error
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          not:
+            required: [example]

@@ -1,0 +1,66 @@
+name: Contract · Compatibility
+
+on:
+  workflow_call:
+    inputs:
+      openapi-base:
+        type: string
+        required: false
+        default: ''
+      openapi-head:
+        type: string
+        required: false
+        default: ''
+      contract-base:
+        type: string
+        required: false
+        default: ''
+      contract-head:
+        type: string
+        required: false
+        default: ''
+      contracts-base-package:
+        type: string
+        required: false
+        default: ''
+      contracts-head-package:
+        type: string
+        required: false
+        default: ''
+      base-version:
+        type: string
+        required: true
+      head-version:
+        type: string
+        required: true
+      platform-ref:
+        type: string
+        required: false
+        default: 'v1'
+
+permissions:
+  contents: read
+
+jobs:
+  compatibility:
+    name: Breaking-change gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - uses: ./.platform/actions/contract-compatibility
+        with:
+          openapi-base: ${{ inputs.openapi-base }}
+          openapi-head: ${{ inputs.openapi-head }}
+          contract-base: ${{ inputs.contract-base }}
+          contract-head: ${{ inputs.contract-head }}
+          contracts-base-package: ${{ inputs.contracts-base-package }}
+          contracts-head-package: ${{ inputs.contracts-head-package }}
+          base-version: ${{ inputs.base-version }}
+          head-version: ${{ inputs.head-version }}

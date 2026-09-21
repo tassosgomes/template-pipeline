@@ -23,6 +23,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
       - name: actionlint
         shell: bash
         run: |
@@ -44,6 +48,115 @@ jobs:
 
       - name: Actions de terceiros pinadas por SHA (pesquisa §5.2)
         run: ./scripts/check-pins.sh
+
+      - name: Manifestos single-service e monorepo
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/check-platform-manifest.sh examples/platform/valid/single-service.yml
+          ./scripts/check-platform-manifest.sh examples/platform/valid/monorepo.yml
+          for manifest in examples/platform/invalid/*.yml; do
+            if ./scripts/check-platform-manifest.sh "$manifest"; then
+              echo "::error title=Fixture inválido aceito::$manifest"
+              exit 1
+            fi
+          done
+
+      - name: Guards e empacotamento de contratos
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-check-migrations-immutable.sh
+          ./scripts/test-resolve-version.sh
+          ./scripts/contracts-pack.sh --version 1.0.0 --output "$RUNNER_TEMP/contracts"
+
+      - name: CD não expõe segredos e exige digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/test-coolify-deploy.sh
+          if rg -n 'COOLIFY_TOKEN:[[:space:]]*[^$]' .github docs; then
+            echo '::error title=Segredo versionado::COOLIFY_TOKEN precisa vir de secrets.'
+            exit 1
+          fi
+          rg -q 'environment: \$\{\{ inputs.environment \}\}' .github/workflows/cd-coolify.yml
+
+      - name: Resolver global.json e default .NET 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '.sdk.version == "10.0.100" and .sdk.rollForward == "latestFeature" and .test.runner == "Microsoft.Testing.Platform"' examples/dotnet-mtp/global.json >/dev/null
+          test ! -e examples/dotnet/global.json
+          rg -q 'dotnet\) +v="10\.0\.x"' actions/setup-toolchain/action.yml
+          rg -q 'global\.json ancestral' actions/setup-toolchain/action.yml
+
+  # ==========================================================================
+  # Os fixtures de contrato exercitam tanto o caminho feliz quanto os gates.
+  contratos:
+    name: Fixtures de contratos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: OpenAPI válido
+        uses: ./actions/openapi-lint
+        with:
+          working-directory: .
+          spec-glob: 'examples/openapi/valid.yaml'
+          ruleset: rulesets/openapi.yaml
+
+      - id: openapi-invalid
+        continue-on-error: true
+        name: OpenAPI inválido reprova
+        uses: ./actions/openapi-lint
+        with:
+          working-directory: .
+          spec-glob: 'examples/openapi/invalid.yaml'
+          ruleset: rulesets/openapi.yaml
+
+      - name: Conferir gate OpenAPI
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.openapi-invalid.outcome }}" = failure ]
+
+      - name: Compatibilidade aditiva passa
+        uses: ./actions/contract-compatibility
+        with:
+          openapi-base: examples/openapi/compatibility/base.yaml
+          openapi-head: examples/openapi/compatibility/head-additive.yaml
+          contract-base: examples/contracts/compatibility/base-public-api.txt
+          contract-head: examples/contracts/compatibility/head-additive-public-api.txt
+          base-version: 1.0.0
+          head-version: 1.1.0
+
+      - id: compatibility-breaking
+        continue-on-error: true
+        name: Breaking change sem major reprova
+        uses: ./actions/contract-compatibility
+        with:
+          openapi-base: examples/openapi/compatibility/base.yaml
+          openapi-head: examples/openapi/compatibility/head-breaking.yaml
+          contract-base: examples/contracts/compatibility/base-public-api.txt
+          contract-head: examples/contracts/compatibility/head-breaking-public-api.txt
+          base-version: 1.0.0
+          head-version: 1.1.0
+
+      - name: Conferir gate de compatibilidade
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ steps.compatibility-breaking.outcome }}" = failure ]
+
+      - name: Breaking change com major é explícita
+        uses: ./actions/contract-compatibility
+        with:
+          contract-base: examples/contracts/compatibility/base-public-api.txt
+          contract-head: examples/contracts/compatibility/head-breaking-public-api.txt
+          base-version: 1.0.0
+          head-version: 2.0.0
 
   # ===========================================================================
   # Prova que o SAST realmente analisa o código e que o gate de severidade funciona.
@@ -127,6 +240,8 @@ jobs:
     with:
       working-directory: examples/dotnet
       version: '8.0.x'
+      service-name: fixture-dotnet
+      test-configuration: Debug
       platform-ref: ${{ github.sha }}
       security-mode: observe
       # Os fixtures contêm vulnerabilidades plantadas de propósito. Publicá-las no code
@@ -234,7 +349,12 @@ jobs:
       # Construída localmente, sem publicar: o self-test não deve criar pacotes no GHCR.
       - name: Construir a imagem do fixture
         shell: bash
-        run: docker build -t dast-fixture:selftest examples/node
+        run: |
+          set -euo pipefail
+          # Caminho legado: working-directory também é o contexto.
+          docker build -t dast-fixture:selftest examples/node
+          # Caminho de monorepo: contexto na raiz e Dockerfile em subdiretório.
+          docker build -t dast-fixture-root:selftest -f examples/node/Dockerfile.root-context .
 
       - id: target
         uses: ./actions/ephemeral-app
@@ -290,7 +410,7 @@ jobs:
   # ===========================================================================
   resultado:
     name: Resultado do self-test
-    needs: [estatico, sast-detecta-vulnerabilidade, dast-efemero, ci-dotnet, ci-java, ci-go, ci-node, ci-python, ci-react-ts]
+    needs: [estatico, contratos, sast-detecta-vulnerabilidade, dast-efemero, ci-dotnet, ci-java, ci-go, ci-node, ci-python, ci-react-ts]
     if: always()
     runs-on: ubuntu-latest
     steps:

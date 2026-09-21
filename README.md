@@ -15,6 +15,7 @@ jobs:
       security-events: write
     with:
       version: '22'
+      service-name: web
       coverage-threshold: 70
 ```
 
@@ -24,8 +25,8 @@ jobs:
 |---|---|---|
 | 0 | Pesquisa e decisões de arquitetura | ✅ concluída |
 | 1 | Biblioteca de CI reusável + camada de segurança | ✅ concluída |
-| 2 | IssueOps: onboarding self-service de serviços | ⏳ a fazer |
-| 3 | CD: Vercel, Coolify, AWS, Azure, GCP, OCI | ⏳ a fazer |
+| 2 | Manifesto de plataforma, contratos e gates de compatibilidade | ✅ base concluída |
+| 3 | CD por digest no Coolify e runbook de runtime | ✅ Coolify concluído |
 | 4 | Catálogo de serviços e auditoria de conformidade | ⏳ a fazer |
 
 ## Stacks suportadas
@@ -39,11 +40,20 @@ configurar. Um verificador automatizado reprova qualquer divergência.
 Cada pipeline faz: `setup → cache → lint → build → testes + cobertura → SAST, segredos e
 dependências → empacotamento → [DAST efêmero] → resumo`.
 
+O CI também suporta monorepos: o contexto Docker e o Dockerfile podem ser relativos à raiz,
+`service-name` é propagado para imagem/summary e tags `serviço/vMAJOR.MINOR.PATCH` geram releases
+identificáveis. Para .NET, `global.json` resolve SDK, `rollForward` e `Microsoft.Testing.Platform`.
+
 ## Documentação
 
 ### Comece por aqui
 - **[Consumindo a plataforma](docs/guides/consumindo-a-plataforma.md)** — exemplo por stack,
   contrato completo, monorepo, armadilhas conhecidas
+- **[CodeQL agendado](docs/guides/codeql-scheduled.md)** — caller, linguagens e permissões
+- **[Contratos públicos](docs/guides/contracts.md)** — OpenAPI/Spectral, compatibilidade e major
+- **[Manifesto de plataforma](docs/guides/platform-manifest.md)** — single-service e monorepo
+- **[CD Coolify](docs/guides/cd-coolify.md)** — promoção por digest, migração e rollback
+- **[Runbook do runtime](docs/runbooks/coolify-runtime.md)** — PostgreSQL, RabbitMQ, Valkey e OTLP
 - **[Segurança: SAST e DAST](docs/guides/seguranca-sast-dast.md)** — como ler um achado, como
   suprimir com justificativa, como sair de `observe` para `enforce`
 
@@ -53,6 +63,7 @@ dependências → empacotamento → [DAST efêmero] → resumo`.
 - [ADR 0001 — Monorepo público da plataforma](docs/adr/0001-monorepo-publico-da-plataforma.md)
 - [ADR 0002 — Contrato único dos workflows de CI](docs/adr/0002-contrato-dos-workflows-de-ci.md)
 - [ADR 0003 — Como os workflows alcançam as composite actions](docs/adr/0003-resolucao-de-actions-locais-em-workflows-reusaveis.md)
+- [ADR 0004 — Caller agendado do CodeQL](docs/adr/0004-codeql-scheduled.md)
 - [Referência: actions de terceiros pinadas](docs/reference/actions-pinadas.md)
 
 ## Estrutura
@@ -61,13 +72,21 @@ dependências → empacotamento → [DAST efêmero] → resumo`.
 .github/workflows/     # workflows reusáveis (precisam ficar na raiz desta pasta)
   ci-*.yml             #   pipelines por stack, contrato idêntico
   sec-sast.yml         #   segurança isolada, para quem já tem CI própria
-  sec-codeql.yml       #   CodeQL agendado
+  sec-codeql.yml       #   CodeQL reusável
+  sec-codeql-scheduled.yml # caller agendado/manual do CodeQL da plataforma
+  cd-coolify.yml         # promoção reusável por digest
+  openapi-lint.yml       # gate reusável de OpenAPI
+  contract-compatibility.yml # gate de breaking change
+  publish-nuget.yml      # pacote de contratos versionado
   sec-dast.yml         #   DAST contra alvo já implantado
   _selftest.yml        #   suíte de regressão da plataforma
   _release.yml         #   publica versão e move a tag major
 actions/               # composite actions (as peças)
   sast/rules/          #   regras Semgrep próprias, para lacunas medidas dos rulesets OSS
-examples/              # um fixture por stack, com vulnerabilidade plantada
+  coolify-deploy/      #   update por digest + polling de deployment
+  openapi-lint/         #   Spectral com ruleset da plataforma
+examples/              # fixtures de stack, manifesto e contratos
+rulesets/              # regras OpenAPI versionadas
 scripts/               # verificadores usados pelo self-test
 docs/                  # pesquisa, ADRs, guias, referência
 platform.schema.json   # schema do platform.yml dos repositórios consumidores
@@ -81,6 +100,8 @@ Daí a convenção de prefixos (`ci-`, `sec-`, `_`) no lugar de pastas.
 ```bash
 ./scripts/check-contract.sh   # os 6 ci-*.yml expõem o mesmo contrato?
 ./scripts/check-pins.sh       # toda action de terceiro pinada por SHA?
+./scripts/check-platform-manifest.sh examples/platform/valid/monorepo.yml
+./scripts/check-migrations-immutable.sh
 actionlint                    # semântica dos workflows
 yamllint --strict -c .yamllint.yml .github/workflows actions
 ```
@@ -88,6 +109,10 @@ yamllint --strict -c .yamllint.yml .github/workflows actions
 O `_selftest.yml` roda tudo isso **e** executa as seis pipelines de ponta a ponta contra os
 fixtures de `examples/`, carregando as composite actions do commit em teste
 ([ADR 0003](docs/adr/0003-resolucao-de-actions-locais-em-workflows-reusaveis.md)).
+
+O pacote `TemplatePipeline.Contracts` é publicado em tags `contracts/vMAJOR.MINOR.PATCH`; o
+workflow empacota somente o projeto de contratos e compila um consumidor isolado por
+`PackageReference`.
 
 ### Os fixtures contêm vulnerabilidades plantadas de propósito
 

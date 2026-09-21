@@ -17,7 +17,7 @@ while IFS= read -r line; do
 
   case "$ref" in
     ./*) continue ;;                                   # action local
-    docker://*) ;;                                     # imagem: versionada na própria tag
+    docker://*) continue ;;                            # action em container; fora do escopo de SHA
   esac
 
   if ! echo "$ref" | grep -qE '@[0-9a-f]{40}$'; then

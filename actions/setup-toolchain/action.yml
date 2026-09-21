@@ -21,7 +21,16 @@ inputs:
 outputs:
   resolved-version:
     description: 'Versão efetivamente aplicada.'
-    value: ${{ steps.resolve.outputs.version }}
+    value: ${{ steps.effective.outputs.version }}
+  test-runner:
+    description: 'Runner de testes .NET resolvido a partir do global.json.'
+    value: ${{ steps.resolve.outputs.test-runner }}
+  global-json:
+    description: 'global.json ancestral usado na resolução, se houver.'
+    value: ${{ steps.resolve.outputs.global-json-file }}
+  roll-forward:
+    description: 'Política rollForward lida do global.json.'
+    value: ${{ steps.resolve.outputs.roll-forward }}
 
 runs:
   using: composite
@@ -29,30 +38,116 @@ runs:
     # Defaults da plataforma ficam em um lugar só: mudar aqui muda para todos os repositórios.
     - id: resolve
       shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        REQUESTED_VERSION: ${{ inputs.version }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
-        v="${{ inputs.version }}"
+        v="$REQUESTED_VERSION"
+        global_json_file=""
+        global_version=""
+        roll_forward=""
+        test_runner="VSTest"
+        source="explicit"
+
+        if [ "$STACK" = "dotnet" ]; then
+          project_dir="$GITHUB_WORKSPACE/$WORKING_DIRECTORY"
+          project_dir="$(cd "$project_dir" && pwd)"
+          cursor="$project_dir"
+          while :; do
+            if [ -f "$cursor/global.json" ]; then
+              global_json_file="$cursor/global.json"
+              break
+            fi
+            parent="$(dirname "$cursor")"
+            [ "$parent" = "$cursor" ] && break
+            cursor="$parent"
+          done
+
+          if [ -n "$global_json_file" ]; then
+            if ! jq -e . "$global_json_file" >/dev/null 2>&1; then
+              echo "::error title=global.json inválido::Não foi possível interpretar '$global_json_file' como JSON."
+              exit 1
+            fi
+            if ! jq -e 'type == "object" and (.sdk == null or (.sdk | type == "object")) and (.test == null or (.test | type == "object"))' "$global_json_file" >/dev/null; then
+              echo "::error title=global.json inválido::'sdk' e 'test' precisam ser objetos em '$global_json_file'."
+              exit 1
+            fi
+            global_version="$(jq -r '.sdk.version // empty' "$global_json_file")"
+            roll_forward="$(jq -r '.sdk.rollForward // empty' "$global_json_file")"
+            test_runner="$(jq -r '.test.runner // "VSTest"' "$global_json_file")"
+            if [ -n "$global_version" ] && ! [[ "$global_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error title=global.json inválido::sdk.version '$global_version' não é uma versão completa válida."
+              exit 1
+            fi
+            if [ -n "$roll_forward" ] && ! [[ "$roll_forward" =~ ^(patch|feature|minor|major|latestPatch|latestFeature|latestMinor|latestMajor|disable)$ ]]; then
+              echo "::error title=global.json inválido::sdk.rollForward '$roll_forward' não é suportado."
+              exit 1
+            fi
+            case "$test_runner" in
+              VSTest|Microsoft.Testing.Platform) ;;
+              *)
+                echo "::error title=Runner .NET desconhecido::test.runner '$test_runner' em '$global_json_file' deve ser VSTest ou Microsoft.Testing.Platform."
+                exit 1
+                ;;
+            esac
+            echo "::notice title=global.json::sdk=${global_version:-default} rollForward=${roll_forward:-default} test.runner=$test_runner ($global_json_file)"
+          fi
+        fi
+
         if [ -z "$v" ]; then
-          case "${{ inputs.stack }}" in
-            dotnet)         v="8.0.x" ;;
+          if [ "$STACK" = "dotnet" ] && [ -n "$global_version" ]; then
+            v="$global_version"
+            source="global-json"
+          else
+            case "$STACK" in
+            dotnet)         v="10.0.x" ;;
             java)           v="21"    ;;
             go)             v="1.23"  ;;
             node|react-ts)  v="22"    ;;
             python)         v="3.12"  ;;
             *)
-              echo "::error title=Stack desconhecida::'${{ inputs.stack }}' não é suportada pela plataforma."
+              echo "::error title=Stack desconhecida::'$STACK' não é suportada pela plataforma."
               exit 1
               ;;
-          esac
-          echo "::notice title=Versão default::${{ inputs.stack }} sem 'version' informada; usando o default da plataforma ($v)."
+            esac
+            source="default"
+            echo "::notice title=Versão default::$STACK sem 'version' informada; usando o default da plataforma ($v)."
+          fi
         fi
         echo "version=$v" >> "$GITHUB_OUTPUT"
+        echo "source=$source" >> "$GITHUB_OUTPUT"
+        echo "global-json-file=$global_json_file" >> "$GITHUB_OUTPUT"
+        echo "roll-forward=$roll_forward" >> "$GITHUB_OUTPUT"
+        echo "test-runner=$test_runner" >> "$GITHUB_OUTPUT"
 
     # ------------------------------------------------------------------------- dotnet
-    - if: inputs.stack == 'dotnet'
+    - if: inputs.stack == 'dotnet' && steps.resolve.outputs.source == 'global-json'
+      uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      with:
+        global-json-file: ${{ steps.resolve.outputs.global-json-file }}
+
+    - if: inputs.stack == 'dotnet' && steps.resolve.outputs.source != 'global-json'
       uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
       with:
         dotnet-version: ${{ steps.resolve.outputs.version }}
+
+    - id: effective
+      shell: bash
+      env:
+        STACK: ${{ inputs.stack }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        RESOLVED: ${{ steps.resolve.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [ "$STACK" = "dotnet" ]; then
+          version="$(cd "$GITHUB_WORKSPACE/$WORKING_DIRECTORY" && dotnet --version)"
+        else
+          version="$RESOLVED"
+        fi
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Toolchain resolvida::$STACK $version"
 
     # O cache nativo do setup-dotnet exige packages.lock.json, que a maioria dos projetos
     # não versiona. Cacheamos o diretório global do NuGet, chaveado pelos arquivos de projeto.
@@ -60,7 +155,7 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.nuget/packages
-        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.fsproj', '**/Directory.Packages.props', '**/packages.lock.json') }}
+        key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/*.fsproj', '**/Directory.Packages.props', '**/packages.lock.json', '**/global.json') }}
         restore-keys: |
           nuget-${{ runner.os }}-
 

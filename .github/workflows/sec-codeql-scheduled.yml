@@ -1,0 +1,28 @@
+name: Segurança · CodeQL (agendado)
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  security-events: write
+
+jobs:
+  codeql:
+    name: CodeQL da plataforma
+    uses: ./.github/workflows/sec-codeql.yml
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    with:
+      # Este repositório contém fixtures de todas as stacks suportadas. A lista explícita
+      # evita que a detecção de um único manifesto omita linguagens do monorepo de exemplos.
+      languages: '["csharp","java","go","javascript-typescript","python"]'
+      # Os fixtures vivem em vários subdiretórios e não há um projeto raiz único para autobuild.
+      build-mode: 'none'
+      working-directory: '.'
+      platform-ref: ${{ github.sha }}

@@ -1,0 +1,134 @@
+name: 'Check contract compatibility'
+description: 'Rejects removed OpenAPI operations or public contract members without a major version.'
+
+inputs:
+  openapi-base:
+    description: 'Base OpenAPI file; empty means no base contract.'
+    required: false
+    default: ''
+  openapi-head:
+    description: 'Head OpenAPI file; empty means no head contract.'
+    required: false
+    default: ''
+  contract-base:
+    description: 'Base public API snapshot.'
+    required: false
+    default: ''
+  contract-head:
+    description: 'Head public API snapshot.'
+    required: false
+    default: ''
+  contracts-base-package:
+    description: 'Base Contracts nupkg for Microsoft.DotNet.ApiCompat.'
+    required: false
+    default: ''
+  contracts-head-package:
+    description: 'Head Contracts nupkg for Microsoft.DotNet.ApiCompat.'
+    required: false
+    default: ''
+  apicompat-version:
+    description: 'Exact Microsoft.DotNet.ApiCompat.Tool version.'
+    required: false
+    default: '10.0.100'
+  base-version:
+    description: 'Base semantic version.'
+    required: true
+  head-version:
+    description: 'Head semantic version.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Compatibility gate
+      shell: bash
+      env:
+        OPENAPI_BASE: ${{ inputs.openapi-base }}
+        OPENAPI_HEAD: ${{ inputs.openapi-head }}
+        CONTRACT_BASE: ${{ inputs.contract-base }}
+        CONTRACT_HEAD: ${{ inputs.contract-head }}
+        CONTRACTS_BASE_PACKAGE: ${{ inputs.contracts-base-package }}
+        CONTRACTS_HEAD_PACKAGE: ${{ inputs.contracts-head-package }}
+        APICOMPAT_VERSION: ${{ inputs.apicompat-version }}
+        BASE_VERSION: ${{ inputs.base-version }}
+        HEAD_VERSION: ${{ inputs.head-version }}
+      run: |
+        set -euo pipefail
+        major() { printf '%s' "$1" | cut -d. -f1; }
+        base_major="$(major "$BASE_VERSION")"
+        head_major="$(major "$HEAD_VERSION")"
+        if ! [[ "$BASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$HEAD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error title=Versão inválida::Use versões semver como 1.2.3."; exit 1
+        fi
+        allow_breaking=false
+        [ "$head_major" -gt "$base_major" ] && allow_breaking=true
+
+        compare_lines() {
+          local label="$1" base="$2" head="$3"
+          [ -z "$base" ] || [ -f "$base" ] || { echo "::error title=Snapshot base ausente::$label: $base"; return 1; }
+          [ -z "$head" ] || [ -f "$head" ] || { echo "::error title=Snapshot head ausente::$label: $head"; return 1; }
+          [ -z "$base" ] || [ -z "$head" ] && return 0
+          removed="$(comm -23 <(sed '/^[[:space:]]*$/d' "$base" | sort -u) <(sed '/^[[:space:]]*$/d' "$head" | sort -u))"
+          if [ -n "$removed" ]; then
+            if [ "$allow_breaking" = true ]; then
+              echo "::warning title=Breaking change permitida::$label removido com bump major ($BASE_VERSION -> $HEAD_VERSION)."
+              printf '%s\n' "$removed"
+            else
+              echo "::error title=Breaking change sem bump major::$label remove membros públicos; atualize para major antes de publicar."
+              printf '%s\n' "$removed"
+              return 1
+            fi
+          fi
+        }
+
+        if [ -n "$OPENAPI_BASE" ] || [ -n "$OPENAPI_HEAD" ]; then
+          [ -f "$OPENAPI_BASE" ] || { echo "::error title=OpenAPI base ausente::$OPENAPI_BASE"; exit 1; }
+          [ -f "$OPENAPI_HEAD" ] || { echo "::error title=OpenAPI head ausente::$OPENAPI_HEAD"; exit 1; }
+          api_surface() {
+            ruby -ryaml -e '
+              ignored = %w[description summary examples servers]
+              def emit(value, path, ignored)
+                case value
+                when Hash
+                  value.keys.sort.each do |key|
+                    next if ignored.include?(key.to_s)
+                    next if path == ["info"] && key.to_s == "version"
+                    emit(value[key], path + [key.to_s], ignored)
+                  end
+                when Array
+                  if value.all? { |item| item.is_a?(String) || item.is_a?(Numeric) || item == true || item == false }
+                    value.map(&:to_s).sort.each { |item| puts "#{path.join(".")}[]=#{item}" }
+                  else
+                    value.each { |item| emit(item, path + ["[]"], ignored) }
+                  end
+                else
+                  puts "#{path.join(".")}=#{value}" unless value.nil?
+                end
+              end
+              document = YAML.safe_load(File.read(ARGV[0]), aliases: true) || {}
+              emit(document, [], ignored)
+            ' "$1" | sort -u
+          }
+          api_surface "$OPENAPI_BASE" > .openapi-base.surface
+          api_surface "$OPENAPI_HEAD" > .openapi-head.surface
+          compare_lines OpenAPI .openapi-base.surface .openapi-head.surface
+        fi
+
+        if [ -n "$CONTRACTS_BASE_PACKAGE" ] || [ -n "$CONTRACTS_HEAD_PACKAGE" ]; then
+          [ -f "$CONTRACTS_BASE_PACKAGE" ] || { echo "::error title=Package base ausente::$CONTRACTS_BASE_PACKAGE"; exit 1; }
+          [ -f "$CONTRACTS_HEAD_PACKAGE" ] || { echo "::error title=Package head ausente::$CONTRACTS_HEAD_PACKAGE"; exit 1; }
+          tool_dir="${RUNNER_TEMP:-/tmp}/apicompat"
+          mkdir -p "$tool_dir"
+          dotnet tool install --tool-path "$tool_dir" Microsoft.DotNet.ApiCompat.Tool --version "$APICOMPAT_VERSION" --no-cache
+          if ! "$tool_dir/apicompat" package "$CONTRACTS_HEAD_PACKAGE" --baseline-package "$CONTRACTS_BASE_PACKAGE"; then
+            if [ "$allow_breaking" = true ]; then
+              echo "::warning title=Breaking change de Contracts permitida::ApiCompat encontrou incompatibilidade com bump major ($BASE_VERSION -> $HEAD_VERSION)."
+            else
+              echo "::error title=Breaking change de Contracts sem bump major::ApiCompat reprovou a comparação."
+              exit 1
+            fi
+          fi
+        else
+          compare_lines Contracts "$CONTRACT_BASE" "$CONTRACT_HEAD"
+        fi
+        echo '✅ Compatibilidade de contratos aprovada.'

@@ -1,0 +1,60 @@
+name: 'Resolve artifact version'
+description: 'Resolves a release version and stable service name from the Git ref.'
+
+inputs:
+  service-name:
+    description: 'Stable service name. Empty allows service/vMAJOR.MINOR.PATCH tags to provide it.'
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: 'Release version or short commit SHA.'
+    value: ${{ steps.resolve.outputs.version }}
+  service-name:
+    description: 'Stable service name, from input or a service/vMAJOR.MINOR.PATCH tag.'
+    value: ${{ steps.resolve.outputs.service-name }}
+
+runs:
+  using: composite
+  steps:
+    - id: resolve
+      shell: bash
+      env:
+        REQUESTED_SERVICE: ${{ inputs.service-name }}
+      run: |
+        set -euo pipefail
+
+        service="$REQUESTED_SERVICE"
+        version=""
+
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          tag="${GITHUB_REF#refs/tags/}"
+          if [[ "$tag" =~ ^([a-z0-9][a-z0-9._-]*)/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            derived_service="${BASH_REMATCH[1]}"
+            version="v${BASH_REMATCH[2]}"
+            if [ -n "$service" ] && [ "$service" != "$derived_service" ]; then
+              echo "::error title=Serviço divergente::A tag define '$derived_service', mas service-name define '$service'."
+              exit 1
+            fi
+            service="$derived_service"
+          elif [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            version="$tag"
+          else
+            echo "::error title=Tag inválida::Use vMAJOR.MINOR.PATCH ou serviço/vMAJOR.MINOR.PATCH; recebido '$tag'."
+            exit 1
+          fi
+        else
+          version="$(git rev-parse --short HEAD)"
+        fi
+
+        if [ -n "$service" ] && ! [[ "$service" =~ ^[a-z0-9][a-z0-9._-]*$ ]]; then
+          echo "::error title=Nome de serviço inválido::service-name '$service' deve usar minúsculas, dígitos, ponto, sublinhado ou hífen."
+          exit 1
+        fi
+
+        {
+          echo "version=$version"
+          echo "service-name=$service"
+        } >> "$GITHUB_OUTPUT"
+        echo "::notice title=Versão::$version serviço=${service:-não informado}"

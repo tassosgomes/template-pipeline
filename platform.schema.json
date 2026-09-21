@@ -2,32 +2,37 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/tassosgomes/template-pipeline/platform.schema.json",
   "title": "platform.yml",
-  "description": "Manifesto do serviço. Fica na raiz de cada repositório consumidor e é a fonte do catálogo de serviços e do workflow de auditoria da plataforma (Fase 2).",
-  "type": "object",
-  "required": ["nome", "time", "stack"],
-  "additionalProperties": false,
-  "properties": {
-    "nome": {
+  "description": "Manifesto do serviço ou do monorepo. O formato single-service mantém o contrato legado; o formato monorepo usa servicos[].",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/singleService"
+    },
+    {
+      "$ref": "#/$defs/monorepo"
+    }
+  ],
+  "$defs": {
+    "serviceName": {
       "type": "string",
       "description": "Identificador do serviço, em kebab-case.",
       "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
       "maxLength": 63
-    },
-    "descricao": {
-      "type": "string",
-      "description": "Uma linha sobre o que o serviço faz.",
-      "maxLength": 200
-    },
-    "time": {
-      "type": "string",
-      "description": "Time dono do serviço. Deve corresponder a um time da organização no GitHub."
     },
     "stack": {
       "type": "string",
       "description": "Stack do serviço. Determina qual workflow ci-*.yml da plataforma é usado.",
       "enum": ["dotnet", "java", "go", "node", "python", "react-ts"]
     },
-    "criticidade": {
+    "description": {
+      "type": "string",
+      "description": "Uma linha sobre o que o serviço faz.",
+      "maxLength": 200
+    },
+    "team": {
+      "type": "string",
+      "description": "Time dono do serviço. Deve corresponder a um time da organização no GitHub."
+    },
+    "criticality": {
       "type": "string",
       "description": "Criticidade de negócio. Governa o rigor esperado dos gates de segurança.",
       "enum": ["baixa", "media", "alta", "critica"],
@@ -52,7 +57,7 @@
         }
       }
     },
-    "seguranca": {
+    "security": {
       "type": "object",
       "description": "Postura de segurança do serviço.",
       "additionalProperties": false,
@@ -75,12 +80,128 @@
         }
       }
     },
-    "contato": {
+    "contact": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "slack": { "type": "string" },
-        "email": { "type": "string", "format": "email" }
+        "slack": {
+          "type": "string"
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        }
+      }
+    },
+    "relativePath": {
+      "type": "string",
+      "description": "Caminho relativo e canônico do serviço a partir da raiz do repositório.",
+      "pattern": "^(?!\\.?$)(?!.*(?:^|/)\\.\\.?(?:/|$))[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
+      "maxLength": 255
+    },
+    "singleService": {
+      "type": "object",
+      "required": ["nome", "time", "stack"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": {
+          "$ref": "#/$defs/serviceName"
+        },
+        "descricao": {
+          "$ref": "#/$defs/description"
+        },
+        "time": {
+          "$ref": "#/$defs/team"
+        },
+        "stack": {
+          "$ref": "#/$defs/stack"
+        },
+        "criticidade": {
+          "$ref": "#/$defs/criticality"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "seguranca": {
+          "$ref": "#/$defs/security"
+        },
+        "contato": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "description": "Valores herdados pelos serviços que não os definirem localmente.",
+      "additionalProperties": false,
+      "properties": {
+        "time": {
+          "$ref": "#/$defs/team"
+        },
+        "criticidade": {
+          "$ref": "#/$defs/criticality"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "seguranca": {
+          "$ref": "#/$defs/security"
+        },
+        "contato": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "monorepoService": {
+      "type": "object",
+      "required": ["nome", "path", "stack"],
+      "additionalProperties": false,
+      "properties": {
+        "nome": {
+          "$ref": "#/$defs/serviceName"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "descricao": {
+          "$ref": "#/$defs/description"
+        },
+        "time": {
+          "$ref": "#/$defs/team"
+        },
+        "stack": {
+          "$ref": "#/$defs/stack"
+        },
+        "criticidade": {
+          "$ref": "#/$defs/criticality"
+        },
+        "deploy": {
+          "$ref": "#/$defs/deploy"
+        },
+        "seguranca": {
+          "$ref": "#/$defs/security"
+        },
+        "contato": {
+          "$ref": "#/$defs/contact"
+        }
+      }
+    },
+    "monorepo": {
+      "type": "object",
+      "required": ["servicos"],
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "$ref": "#/$defs/defaults"
+        },
+        "servicos": {
+          "type": "array",
+          "description": "Coleção canônica de serviços do monorepo.",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/monorepoService"
+          }
+        }
       }
     }
   }

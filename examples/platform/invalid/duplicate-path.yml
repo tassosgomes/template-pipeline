@@ -1,0 +1,10 @@
+defaults:
+  time: platform
+
+servicos:
+  - nome: identity
+    path: apps/identity
+    stack: dotnet
+  - nome: catalog
+    path: apps/identity
+    stack: node

@@ -19,11 +19,11 @@ for s in "${stacks[@]}"; do
   f=".github/workflows/ci-${s}.yml"
   [ -f "$f" ] || { echo "❌ ausente: $f"; exit 1; }
 
-  # Nome e tipo de cada input, e o nome de cada output. O default fica de fora de
-  # propósito: 'version' varia por stack por natureza.
+  # Nome, tipo e default de cada input, além do nome de cada output. O default faz
+  # parte do contrato: os seis workflows precisam evoluir juntos.
   {
     echo "== inputs =="
-    yq e '.on.workflow_call.inputs | to_entries | .[] | .key + ":" + (.value.type // "string")' "$f" | sort
+    yq e '.on.workflow_call.inputs | to_entries | .[] | .key + ":" + (.value.type // "string") + ":" + ((.value.default // "<unset>") | tostring)' "$f" | sort
     echo "== outputs =="
     yq e '.on.workflow_call.outputs | keys | .[]' "$f" | sort
   } > "$tmp/$s.txt"

@@ -1,0 +1,168 @@
+name: 'Deploy immutable image to Coolify'
+description: 'Updates a Coolify Docker Image application to a digest and waits for deployment completion.'
+
+inputs:
+  api-url:
+    description: 'Coolify API base URL, for example https://coolify.example.com/api/v1.'
+    required: true
+  application-uuid:
+    description: 'Coolify application UUID.'
+    required: true
+  image-ref:
+    description: 'Complete image reference with a sha256 digest.'
+    required: true
+  token:
+    description: 'Coolify API token.'
+    required: true
+  deploy-webhook:
+    description: 'Optional authenticated deploy webhook. API deployment is used when empty.'
+    required: false
+    default: ''
+  timeout-seconds:
+    description: 'Maximum time to wait for Coolify.'
+    required: false
+    default: '900'
+  poll-interval-seconds:
+    description: 'Polling interval.'
+    required: false
+    default: '10'
+  health-url:
+    description: 'Optional URL to probe after Coolify reports success.'
+    required: false
+    default: ''
+
+outputs:
+  deployment-id:
+    description: 'Coolify deployment UUID, when returned by the API.'
+    value: ${{ steps.deploy.outputs.deployment-id }}
+  status:
+    description: 'Final deployment status.'
+    value: ${{ steps.wait.outputs.status }}
+  image-ref:
+    description: 'Validated immutable image reference.'
+    value: ${{ steps.validate.outputs.image-ref }}
+
+runs:
+  using: composite
+  steps:
+    - id: validate
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image-ref }}
+      run: |
+        set -euo pipefail
+        if [[ ! "$IMAGE_REF" =~ ^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$ ]]; then
+          echo "::error title=Imagem não imutável::image-ref precisa ser repository@sha256:<64 hex>. Tags como latest não são aceitas."
+          exit 1
+        fi
+        image_name="${IMAGE_REF%@*}"
+        digest="${IMAGE_REF##*@}"
+        # Coolify's Docker Registry field stores a digest as sha256-<hex>.
+        coolify_hash="${digest/:/-}"
+        {
+          echo "image-ref=$IMAGE_REF"
+          echo "image-name=$image_name"
+          echo "coolify-hash=$coolify_hash"
+        } >> "$GITHUB_OUTPUT"
+
+    - id: update
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        APPLICATION_UUID: ${{ inputs.application-uuid }}
+        TOKEN: ${{ inputs.token }}
+        IMAGE_NAME: ${{ steps.validate.outputs.image-name }}
+        COOLIFY_HASH: ${{ steps.validate.outputs.coolify-hash }}
+      run: |
+        set -euo pipefail
+        api="${API_URL%/}"
+        body="$(jq -cn --arg name "$IMAGE_NAME" --arg tag "$COOLIFY_HASH" \
+          '{docker_registry_image_name:$name,docker_registry_image_tag:$tag}')"
+        curl --silent --show-error --fail-with-body \
+          --request PATCH "$api/applications/$APPLICATION_UUID" \
+          --header "Authorization: Bearer $TOKEN" \
+          --header 'Content-Type: application/json' \
+          --data "$body" >/dev/null
+        echo "::notice title=Imagem atualizada::Coolify configurado para o digest informado."
+
+    - id: deploy
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        APPLICATION_UUID: ${{ inputs.application-uuid }}
+        TOKEN: ${{ inputs.token }}
+        DEPLOY_WEBHOOK: ${{ inputs.deploy-webhook }}
+      run: |
+        set -euo pipefail
+        api="${API_URL%/}"
+        if [ -n "$DEPLOY_WEBHOOK" ]; then
+          response="$(curl --silent --show-error --fail-with-body \
+            --request POST "$DEPLOY_WEBHOOK" \
+            --header "Authorization: Bearer $TOKEN")"
+        else
+          response="$(curl --silent --show-error --fail-with-body \
+            --request POST "$api/deploy" \
+            --header "Authorization: Bearer $TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data "$(jq -cn --arg uuid "$APPLICATION_UUID" '{uuid:$uuid,force:false}')")"
+        fi
+        deployment_id="$(jq -r '.deployments[0].deployment_uuid // .deployment_uuid // empty' <<<"$response")"
+        if [ -z "$deployment_id" ]; then
+          echo "::error title=Coolify não retornou deployment UUID::Não é possível aguardar um resultado determinístico."
+          exit 1
+        fi
+        echo "deployment-id=$deployment_id" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Deploy Coolify enfileirado::deployment=$deployment_id"
+
+    - id: wait
+      shell: bash
+      env:
+        API_URL: ${{ inputs.api-url }}
+        TOKEN: ${{ inputs.token }}
+        DEPLOYMENT_ID: ${{ steps.deploy.outputs.deployment-id }}
+        TIMEOUT: ${{ inputs.timeout-seconds }}
+        POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+        HEALTH_URL: ${{ inputs.health-url }}
+      run: |
+        set -euo pipefail
+        api="${API_URL%/}"
+        deadline=$((SECONDS + TIMEOUT))
+        status="queued"
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          payload="$(curl --silent --show-error --fail-with-body \
+            --header "Authorization: Bearer $TOKEN" \
+            "$api/deployments/$DEPLOYMENT_ID")"
+          status="$(jq -r '.status // empty' <<<"$payload")"
+          case "$status" in
+            finished|success|succeeded)
+              break
+              ;;
+            failed|failure|cancelled|canceled|cancelled-by-user)
+              echo "::error title=Deploy Coolify falhou::status=$status deployment=$DEPLOYMENT_ID"
+              echo "status=$status" >> "$GITHUB_OUTPUT"
+              exit 1
+              ;;
+            *)
+              sleep "$POLL_INTERVAL"
+              ;;
+          esac
+        done
+        if [[ ! "$status" =~ ^(finished|success|succeeded)$ ]]; then
+          echo "::error title=Timeout no deploy Coolify::Último status '$status'."
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 1
+        fi
+
+        if [ -n "$HEALTH_URL" ]; then
+          health_deadline=$((SECONDS + TIMEOUT))
+          until curl --silent --show-error --fail --max-time 15 "$HEALTH_URL" >/dev/null; do
+            if [ "$SECONDS" -ge "$health_deadline" ]; then
+              echo "::error title=Healthcheck pós-deploy falhou::URL não respondeu dentro do timeout."
+              echo "status=healthcheck-failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            sleep "$POLL_INTERVAL"
+          done
+        fi
+        echo "status=$status" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Deploy Coolify concluído::status=$status deployment=$DEPLOYMENT_ID"

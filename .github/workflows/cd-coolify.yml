@@ -1,0 +1,234 @@
+name: CD · Coolify
+
+# Workflow reusável: o chamador escolhe o ambiente protegido e passa a imagem
+# completa por digest. A aprovação do GitHub Environment acontece antes da
+# migração e novamente protege o job que altera o runtime.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'GitHub Environment protegido: development | staging | production.'
+        type: string
+        required: true
+      image-ref:
+        description: 'Imagem publicada pelo CI, no formato repository@sha256:<64 hex>.'
+        type: string
+        required: true
+      service-name:
+        description: 'Nome estável do serviço para rastreabilidade.'
+        type: string
+        required: false
+        default: ''
+      version:
+        description: 'Versão textual da release, sem substituir o digest.'
+        type: string
+        required: false
+        default: ''
+      rollback-image-ref:
+        description: 'Imagem anterior, também por digest; quando preenchida, migrações são puladas.'
+        type: string
+        required: false
+        default: ''
+      application-uuid:
+        description: 'UUID da aplicação Docker Image no Coolify.'
+        type: string
+        required: true
+      coolify-api-url:
+        description: 'Base da API Coolify, incluindo /api/v1.'
+        type: string
+        required: true
+      deploy-webhook:
+        description: 'Webhook opcional para disparar o deploy após atualizar a aplicação.'
+        type: string
+        required: false
+        default: ''
+      migration-command:
+        description: 'Comando explícito de migração; vazio desliga a etapa.'
+        type: string
+        required: false
+        default: ''
+      migration-working-directory:
+        description: 'Diretório do serviço onde o comando de migração roda.'
+        type: string
+        required: false
+        default: '.'
+      migration-base-ref:
+        description: 'Ref comparada pelo guard de migrations históricas.'
+        type: string
+        required: false
+        default: 'origin/main'
+      platform-ref:
+        description: 'Ref da plataforma para carregar o guard de migrations.'
+        type: string
+        required: false
+        default: 'v1'
+      health-url:
+        description: 'URL opcional de healthcheck após o deploy.'
+        type: string
+        required: false
+        default: ''
+      timeout-seconds:
+        description: 'Timeout total do deploy/healthcheck.'
+        type: number
+        required: false
+        default: 900
+      poll-interval-seconds:
+        description: 'Intervalo de polling do Coolify.'
+        type: number
+        required: false
+        default: 10
+    secrets:
+      coolify-token:
+        description: 'Token mínimo da API Coolify, armazenado no Environment.'
+        required: true
+      database-url:
+        description: 'Connection string da migração, armazenada no Environment.'
+        required: false
+    outputs:
+      deployed-image:
+        description: 'Imagem digest efetivamente escolhida.'
+        value: ${{ jobs.validate.outputs.target-image }}
+      deployment-id:
+        description: 'UUID do deployment Coolify.'
+        value: ${{ jobs.deploy.outputs.deployment-id }}
+      status:
+        description: 'Status final do deploy.'
+        value: ${{ jobs.deploy.outputs.status }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validar promoção
+    runs-on: ubuntu-latest
+    outputs:
+      target-image: ${{ steps.validate.outputs.target-image }}
+      rollback: ${{ steps.validate.outputs.rollback }}
+    steps:
+      - id: validate
+        shell: bash
+        env:
+          IMAGE_REF: ${{ inputs.image-ref }}
+          ROLLBACK_IMAGE_REF: ${{ inputs.rollback-image-ref }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENVIRONMENT" in development|staging|production) ;; *)
+            echo "::error title=Environment inválido::Use development, staging ou production."; exit 1 ;;
+          esac
+          target="$IMAGE_REF"
+          rollback=false
+          if [ -n "$ROLLBACK_IMAGE_REF" ]; then
+            target="$ROLLBACK_IMAGE_REF"
+            rollback=true
+          fi
+          if [[ ! "$target" =~ ^[^@[:space:]]+@sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error title=Imagem não imutável::CD aceita somente repository@sha256:<64 hex>."; exit 1
+          fi
+          echo "target-image=$target" >> "$GITHUB_OUTPUT"
+          echo "rollback=$rollback" >> "$GITHUB_OUTPUT"
+
+  migrate:
+    name: Migrações forward
+    needs: validate
+    if: needs.validate.result == 'success' && needs.validate.outputs.rollback != 'true' && inputs.migration-command != ''
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - name: Impedir alteração de migrations históricas
+        env:
+          BASE_REF: ${{ inputs.migration-base-ref }}
+        shell: bash
+        run: .platform/scripts/check-migrations-immutable.sh
+
+      - name: Executar migração forward
+        working-directory: ${{ inputs.migration-working-directory }}
+        env:
+          DATABASE_URL: ${{ secrets.database-url }}
+          MIGRATION_COMMAND: ${{ inputs.migration-command }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::notice title=Connection string ausente::O comando não recebeu DATABASE_URL; usando configuração própria do serviço."
+          fi
+          # O comando é deliberadamente explícito e revisável pelo chamador.
+          bash -euo pipefail -c "$MIGRATION_COMMAND"
+
+  deploy:
+    name: Deploy digest no Coolify
+    needs: [validate, migrate]
+    if: >-
+      always() && needs.validate.result == 'success' &&
+      (needs.migrate.result == 'success' || needs.migrate.result == 'skipped')
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+    outputs:
+      deployment-id: ${{ steps.coolify.outputs.deployment-id }}
+      status: ${{ steps.coolify.outputs.status }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: tassosgomes/template-pipeline
+          ref: ${{ inputs.platform-ref }}
+          path: .platform
+
+      - id: coolify
+        uses: ./.platform/actions/coolify-deploy
+        with:
+          api-url: ${{ inputs.coolify-api-url }}
+          application-uuid: ${{ inputs.application-uuid }}
+          image-ref: ${{ needs.validate.outputs.target-image }}
+          token: ${{ secrets.coolify-token }}
+          deploy-webhook: ${{ inputs.deploy-webhook }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}
+          poll-interval-seconds: ${{ inputs.poll-interval-seconds }}
+          health-url: ${{ inputs.health-url }}
+
+  summary:
+    name: Sumário da promoção
+    needs: [validate, migrate, deploy]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Publicar resumo
+        env:
+          TARGET_IMAGE: ${{ needs.validate.outputs.target-image }}
+          MIGRATION_STATUS: ${{ needs.migrate.result }}
+          DEPLOY_STATUS: ${{ needs.deploy.result }}
+          DEPLOYMENT_ID: ${{ needs.deploy.outputs.deployment-id }}
+          SERVICE_NAME: ${{ inputs.service-name }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo '## CD · Coolify'
+            echo
+            echo "- Serviço: \`${SERVICE_NAME:-não informado}\`"
+            echo "- Versão: \`${RELEASE_VERSION:-não informada}\`"
+            echo "- Imagem: \`$TARGET_IMAGE\`"
+            echo "- Migração: \`$MIGRATION_STATUS\`"
+            echo "- Deploy: \`$DEPLOY_STATUS\`"
+            echo "- Deployment UUID: \`${DEPLOYMENT_ID:-não retornado}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

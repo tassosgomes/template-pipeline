@@ -1,8 +1,9 @@
 name: 'Ephemeral App'
 description: >
   Sobe a imagem recém-construída em um container e aguarda o healthcheck, para servir de alvo
-  ao DAST dentro do próprio job de CI. Sempre derrube com o post-step (o caller deve usar
-  actions/ephemeral-app/stop ou `if: always()`).
+  ao DAST dentro do próprio job de CI. A action não cria um passo de stop: o caller deve
+  executar o cleanup em um passo separado com `if: always()` (por exemplo, `docker rm -f`),
+  para remover o container mesmo quando o DAST falhar.
 
 inputs:
   image-ref:

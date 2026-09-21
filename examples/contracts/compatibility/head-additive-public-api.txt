@@ -1,0 +1,5 @@
+GET /v1/widgets
+GET /v1/widgets/{id}
+Widget.id: string
+Widget.name: string
+Widget.description: string

@@ -21,8 +21,14 @@ Duas consequências, que explicam todo o desenho desta camada:
 | Segredos | gitleaks (CLI) | todo PR | **sempre** |
 | Dependências (SCA) | Trivy | todo PR | conforme `security-mode` |
 | Imagem e IaC | Trivy | quando `build-container: true` | conforme `security-mode` |
-| SAST profundo | CodeQL | agendado (`sec-codeql.yml`) | conforme configuração |
+| SAST profundo | CodeQL | agendado (`sec-codeql-scheduled.yml`) | conforme configuração |
 | DAST | OWASP ZAP | PR (efêmero) e pós-deploy (`sec-dast.yml`) | conforme `security-mode` |
+
+O workflow `sec-codeql.yml` é a implementação reusável; o caller
+`sec-codeql-scheduled.yml` deste repositório o executa diariamente às 03:00 UTC e também pode
+ser iniciado manualmente. Ele informa explicitamente `csharp`, `java`, `go`,
+`javascript-typescript` e `python`, pois os fixtures ficam distribuídos em subdiretórios. O
+detalhamento está no [guia de CodeQL agendado](codeql-scheduled.md).
 
 ### Cobertura medida dos rulesets OSS
 

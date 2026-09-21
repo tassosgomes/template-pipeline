@@ -1,0 +1,45 @@
+defaults:
+  time: platform
+  criticidade: media
+  deploy:
+    plataforma: coolify
+    ambientes:
+      - dev
+      - staging
+  seguranca:
+    modo: enforce
+    reprovar-a-partir-de: high
+    dast: false
+
+servicos:
+  - nome: identity
+    path: src/identity
+    stack: dotnet
+  - nome: billing
+    path: src/billing
+    stack: dotnet
+    criticidade: alta
+  - nome: notifications
+    path: src/notifications
+    stack: node
+  - nome: catalog
+    path: src/catalog
+    stack: java
+  - nome: search
+    path: src/search
+    stack: go
+  - nome: web
+    path: apps/web
+    stack: react-ts
+  - nome: worker
+    path: apps/worker
+    stack: python
+  - nome: audit
+    path: apps/audit
+    stack: python
+  - nome: contracts
+    path: packages/contracts
+    stack: dotnet
+  - nome: gateway
+    path: apps/gateway
+    stack: node

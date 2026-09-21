@@ -1,0 +1,68 @@
+name: 'Lint OpenAPI'
+description: 'Runs the repository OpenAPI ruleset against one or more specifications.'
+
+inputs:
+  working-directory:
+    description: 'Repository directory containing the specifications.'
+    required: false
+    default: '.'
+  spec-glob:
+    description: 'Bash pattern matched against paths below working-directory.'
+    required: false
+    default: '**/*.{yaml,yml,json}'
+  ruleset:
+    description: 'Path to the Spectral ruleset.'
+    required: false
+    default: 'rulesets/openapi.yaml'
+  spectral-version:
+    description: 'Exact Spectral CLI version.'
+    required: false
+    default: '6.15.0'
+  fail-severity:
+    description: 'Minimum severity that fails the action: info | warn | error.'
+    required: false
+    default: 'error'
+  output-format:
+    description: 'Spectral output format, for example stylish or json.'
+    required: false
+    default: 'stylish'
+
+runs:
+  using: composite
+  steps:
+    - name: Spectral
+      shell: bash
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        SPEC_GLOB: ${{ inputs.spec-glob }}
+        RULESET: ${{ inputs.ruleset }}
+        SPECTRAL_VERSION: ${{ inputs.spectral-version }}
+        FAIL_SEVERITY: ${{ inputs.fail-severity }}
+        OUTPUT_FORMAT: ${{ inputs.output-format }}
+      run: |
+        set -euo pipefail
+        mapfile -t specs < <(find "$WORKING_DIRECTORY" -type f \( -name '*.yaml' -o -name '*.yml' -o -name '*.json' \) -print | sort)
+        selected=()
+        pattern_root="$SPEC_GLOB"
+        if [ "$WORKING_DIRECTORY" != "." ] && [[ "$pattern_root" != "$WORKING_DIRECTORY"/* ]]; then
+          pattern_root="${WORKING_DIRECTORY%/}/${pattern_root#./}"
+        fi
+        for spec in "${specs[@]}"; do
+          spec="${spec#./}"
+          matched=false
+          for extension in yaml yml json; do
+            pattern="${pattern_root//\{yaml,yml,json\}/$extension}"
+            [[ "$spec" == $pattern ]] && matched=true
+          done
+          [ "$matched" = true ] && selected+=("$spec")
+        done
+        if [ "${#selected[@]}" -eq 0 ]; then
+          echo "::error title=OpenAPI ausente::Nenhum arquivo corresponde a '$SPEC_GLOB' abaixo de '$WORKING_DIRECTORY'."
+          exit 1
+        fi
+        for spec in "${selected[@]}"; do
+          echo "Lint OpenAPI: $spec"
+          npx --yes --package "@stoplight/spectral-cli@$SPECTRAL_VERSION" \
+            spectral lint "$spec" --ruleset "$RULESET" \
+            --fail-severity "$FAIL_SEVERITY" --format "$OUTPUT_FORMAT"
+        done

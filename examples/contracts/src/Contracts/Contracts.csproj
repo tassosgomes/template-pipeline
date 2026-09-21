@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>true</IsPackable>
+    <PackageId>TemplatePipeline.Contracts</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Tassos Gomes</Authors>
+    <Description>Public contracts consumed by platform services.</Description>
+    <PackageTags>contracts;api;template-pipeline</PackageTags>
+    <RepositoryUrl>https://github.com/tassosgomes/template-pipeline</RepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

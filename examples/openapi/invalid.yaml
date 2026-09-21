@@ -1,0 +1,9 @@
+openapi: 3.0.3
+info:
+  title: Invalid example
+  version: 1.0.0
+paths:
+  /v1/WidgetItems:
+    get:
+      responses:
+        '200': {}

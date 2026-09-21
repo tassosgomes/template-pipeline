@@ -1,0 +1,174 @@
+name: Publish Contracts NuGet
+
+on:
+  push:
+    tags:
+      - contracts/v*.*.*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing contracts/vMAJOR.MINOR.PATCH tag
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      repository:
+        description: Repository containing the Contracts project
+        required: false
+        type: string
+        default: ''
+      ref:
+        description: Ref containing the Contracts project
+        required: false
+        type: string
+        default: ''
+      package-version:
+        description: NuGet version without the v prefix
+        required: false
+        type: string
+        default: ''
+      project:
+        description: The only project that may be packed
+        required: false
+        type: string
+        default: examples/contracts/src/Contracts/Contracts.csproj
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    name: Pack Contracts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - id: version
+        name: Validate contracts tag and version
+        shell: bash
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.package-version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag="$DISPATCH_TAG"
+          [ -n "$tag" ] || tag="$REF_NAME"
+          version="$INPUT_VERSION"
+          if [ -n "$tag" ] && [[ "$tag" =~ ^contracts/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            tag_version="${BASH_REMATCH[1]}"
+            if [ -n "$version" ] && [ "$version" != "$tag_version" ]; then
+              echo "::error title=Version mismatch::The input version does not match $tag."
+              exit 1
+            fi
+            version="$tag_version"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error title=Invalid Contracts version::Use contracts/vMAJOR.MINOR.PATCH or package-version MAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Pack only Contracts.csproj
+        shell: bash
+        env:
+          PROJECT: ${{ inputs.project }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          project="$PROJECT"
+          [ -n "$project" ] || project=examples/contracts/src/Contracts/Contracts.csproj
+          ./scripts/contracts-pack.sh --project "$project" --version "$VERSION" --output "$RUNNER_TEMP/contracts"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: contracts-nuget-${{ steps.version.outputs.version }}
+          path: ${{ runner.temp }}/contracts/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    name: Publish immutable package
+    needs: pack
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v7.0.0
+        with:
+          name: contracts-nuget-${{ needs.pack.outputs.version }}
+          path: ${{ runner.temp }}/contracts
+
+      - name: Push to GitHub Packages
+        shell: bash
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ needs.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/nuget.config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="github" value="https://nuget.pkg.github.com/$OWNER/index.json" />
+            </packageSources>
+          </configuration>
+          EOF
+          package="$RUNNER_TEMP/contracts/TemplatePipeline.Contracts.$VERSION.nupkg"
+          test -f "$package"
+          dotnet nuget push "$package" --source github --api-key "$NUGET_AUTH_TOKEN" --configfile "$RUNNER_TEMP/nuget.config"
+
+  consume:
+    name: Restore PackageReference consumer
+    needs: [pack, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore and build the isolated PackageReference fixture
+        shell: bash
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION: ${{ needs.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/nuget.config" <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="github" value="https://nuget.pkg.github.com/$OWNER/index.json" />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+            </packageSources>
+            <packageSourceCredentials>
+              <github>
+                <add key="Username" value="$OWNER" />
+                <add key="ClearTextPassword" value="$NUGET_AUTH_TOKEN" />
+              </github>
+            </packageSourceCredentials>
+          </configuration>
+          EOF
+          dotnet restore examples/contracts/consumer/Contracts.Consumer.csproj --configfile "$RUNNER_TEMP/nuget.config" -p:ContractsPackageVersion="$VERSION"
+          dotnet build examples/contracts/consumer/Contracts.Consumer.csproj --no-restore -c Release -p:ContractsPackageVersion="$VERSION"

@@ -15,6 +15,18 @@ on:
         description: 'Diretório do projeto dentro do repositório.'
         type: string
         default: '.'
+      service-name:
+        description: 'Nome estável do serviço. Tags serviço/vMAJOR.MINOR.PATCH também o definem.'
+        type: string
+        default: ''
+      docker-context:
+        description: 'Contexto Docker relativo à raiz do repositório. Vazio usa working-directory.'
+        type: string
+        default: ''
+      dockerfile:
+        description: 'Caminho do Dockerfile relativo à raiz do repositório. Vazio usa working-directory/Dockerfile.'
+        type: string
+        default: ''
       version:
         description: 'Versão do Node. Vazio usa o default da plataforma.'
         type: string
@@ -35,6 +47,10 @@ on:
       run-tests:
         type: boolean
         default: true
+      test-configuration:
+        description: 'Configuração usada pelos testes. No .NET é passada exatamente uma vez; outras stacks registram como no-op.'
+        type: string
+        default: 'Release'
       coverage-threshold:
         description: 'Cobertura mínima em percentual. 0 desliga o gate.'
         type: number
@@ -104,12 +120,18 @@ on:
         default: ''
 
     outputs:
+      service-name:
+        description: 'Nome estável do serviço, derivado da tag ou do input.'
+        value: ${{ jobs.build.outputs.service-name }}
       version:
         description: 'Versão calculada do artefato.'
         value: ${{ jobs.build.outputs.version }}
       artifact-name:
         description: 'Nome do artifact publicado.'
         value: ${{ jobs.build.outputs.artifact-name }}
+      image-ref:
+        description: 'Nome completo da imagem, sem tag ou digest.'
+        value: ${{ jobs.build.outputs.image-ref }}
       image-digest:
         description: 'Digest imutável da imagem publicada. Consumido pelo CD.'
         value: ${{ jobs.build.outputs.image-digest }}
@@ -131,6 +153,7 @@ jobs:
     name: Build & Test
     runs-on: ${{ inputs.runs-on }}
     outputs:
+      service-name: ${{ steps.version.outputs.service-name }}
       version: ${{ steps.version.outputs.version }}
       artifact-name: ${{ steps.artifact.outputs.name }}
       image-digest: ${{ steps.image.outputs.digest }}
@@ -159,17 +182,9 @@ jobs:
           working-directory: ${{ inputs.working-directory }}
 
       - id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Tag vira a versão do artefato; qualquer outra ref usa o SHA curto.
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            v="${GITHUB_REF#refs/tags/}"
-          else
-            v="$(git rev-parse --short HEAD)"
-          fi
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Versão::$v"
+        uses: ./.platform/actions/resolve-version
+        with:
+          service-name: ${{ inputs.service-name }}
 
       - name: Instalar dependências
         working-directory: ${{ inputs.working-directory }}
@@ -216,8 +231,10 @@ jobs:
         shell: bash
         env:
           EXTRA_ARGS: ${{ inputs.test-args }}
+          TEST_CONFIGURATION: ${{ inputs.test-configuration }}
         run: |
           set -euo pipefail
+          echo "::notice title=Configuração de testes::$TEST_CONFIGURATION (semântica da stack Node)"
           if node -e "process.exit(require('./package.json').scripts?.test ? 0 : 1)"; then
             # shellcheck disable=SC2086
             npm test -- $EXTRA_ARGS
@@ -301,6 +318,8 @@ jobs:
           set -euo pipefail
           name='${{ inputs.image-name }}'
           [ -z "$name" ] && name="${GITHUB_REPOSITORY##*/}"
+          service='${{ steps.version.outputs.service-name }}'
+          [ -z "$service" ] || name="${name%/}/$service"
           # O GHCR exige o caminho em minúsculas.
           echo "ref=ghcr.io/$(echo "${GITHUB_REPOSITORY_OWNER}/${name}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
@@ -308,7 +327,8 @@ jobs:
         if: inputs.build-container
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
-          context: ${{ inputs.working-directory }}
+          context: ${{ inputs.docker-context != '' && inputs.docker-context || inputs.working-directory }}
+          file: ${{ inputs.dockerfile != '' && inputs.dockerfile || format('{0}/Dockerfile', inputs.working-directory) }}
           push: true
           tags: |
             ${{ steps.image-name.outputs.ref }}:${{ steps.version.outputs.version }}
@@ -342,11 +362,14 @@ jobs:
         if: always()
         with:
           stack: node
+          service-name: ${{ steps.version.outputs.service-name }}
           version: ${{ steps.toolchain.outputs.resolved-version }}
           build-version: ${{ steps.version.outputs.version }}
+          test-configuration: ${{ inputs.test-configuration }}
           coverage: ${{ steps.coverage.outputs.pct }}
           coverage-threshold: ${{ inputs.coverage-threshold }}
           artifact-name: ${{ steps.artifact.outputs.name }}
+          image-ref: ${{ steps.image-name.outputs.ref }}
           image-digest: ${{ steps.image.outputs.digest }}
 
   # ===========================================================================
