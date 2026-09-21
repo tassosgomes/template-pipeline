@@ -75,11 +75,14 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/test-coolify-deploy.sh
-          if rg -n 'COOLIFY_TOKEN:[[:space:]]*[^$]' .github docs; then
+          token_key='COOLIFY_TOKEN:'
+          token_separator='[[:space:]]+'
+          non_secret_value='[^$]'
+          if grep -RInE "${token_key}${token_separator}${non_secret_value}" .github docs; then
             echo '::error title=Segredo versionado::COOLIFY_TOKEN precisa vir de secrets.'
             exit 1
           fi
-          rg -q 'environment: \$\{\{ inputs.environment \}\}' .github/workflows/cd-coolify.yml
+          grep -Eq 'environment: \$\{\{ inputs.environment \}\}' .github/workflows/cd-coolify.yml
 
       - name: Resolver global.json e default .NET 10
         shell: bash
@@ -87,8 +90,8 @@ jobs:
           set -euo pipefail
           jq -e '.sdk.version == "10.0.100" and .sdk.rollForward == "latestFeature" and .test.runner == "Microsoft.Testing.Platform"' examples/dotnet-mtp/global.json >/dev/null
           test ! -e examples/dotnet/global.json
-          rg -q 'dotnet\) +v="10\.0\.x"' actions/setup-toolchain/action.yml
-          rg -q 'global\.json ancestral' actions/setup-toolchain/action.yml
+          grep -Eq 'dotnet\) +v="10\.0\.x"' actions/setup-toolchain/action.yml
+          grep -Eq 'global\.json ancestral' actions/setup-toolchain/action.yml
 
   # ==========================================================================
   # Os fixtures de contrato exercitam tanto o caminho feliz quanto os gates.
