@@ -51,6 +51,8 @@ identificáveis. Para .NET, `global.json` resolve SDK, `rollForward` e `Microsof
   contrato completo, monorepo, armadilhas conhecidas
 - **[CodeQL agendado](docs/guides/codeql-scheduled.md)** — caller, linguagens e permissões
 - **[Contratos públicos](docs/guides/contracts.md)** — OpenAPI/Spectral, compatibilidade e major
+- **[Publicando contratos](docs/guides/publicando-contratos.md)** — diretório canônico, geração,
+  versionamento e checklist para OpenAPI, AsyncAPI e ODCS
 - **[Manifesto de plataforma](docs/guides/platform-manifest.md)** — single-service e monorepo
 - **[CD Coolify](docs/guides/cd-coolify.md)** — promoção por digest, migração e rollback
 - **[Runbook do runtime](docs/runbooks/coolify-runtime.md)** — PostgreSQL, RabbitMQ, Valkey e OTLP
