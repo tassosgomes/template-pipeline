@@ -249,10 +249,15 @@ jobs:
         run: |
           set -euo pipefail
           pct=""
-          report=$(find . -path '*/jacoco/jacoco.csv' 2>/dev/null | head -1)
-          if [ -n "$report" ]; then
+          # Monorepo/multi-módulo gera um jacoco.csv por módulo. Usar só o primeiro
+          # (head -1) tornava o gate uma loteria: agrega TODOS os relatórios.
+          mapfile -t reports < <(find . -path '*/jacoco/jacoco.csv' 2>/dev/null | sort || true)
+          if [ "${#reports[@]}" -gt 0 ]; then
+            echo "Relatórios JaCoCo encontrados: ${#reports[@]}"
+            printf ' - %s\n' "${reports[@]}"
             # Colunas do JaCoCo CSV: ... LINE_MISSED(8), LINE_COVERED(9) ...
-            pct=$(awk -F, 'NR>1 {m+=$8; c+=$9} END {if (m+c > 0) printf "%.2f", c*100/(m+c)}' "$report")
+            # FNR>1 pula o cabeçalho de CADA arquivo.
+            pct=$(awk -F, 'FNR>1 {m+=$8; c+=$9} END {if (m+c > 0) printf "%.2f", c*100/(m+c)}' "${reports[@]}" || true)
           fi
 
           if [ -z "$pct" ]; then

@@ -230,13 +230,68 @@ jobs:
         run: |
           set -euo pipefail
           pct=""
-          # VSTest e Microsoft.Testing.Platform podem escolher diretórios diferentes.
-          report=$(find . -type f -name '*.xml' -print0 2>/dev/null \
-            | xargs -0r grep -l '<coverage' \
-            | head -1 || true)
-          if [ -n "$report" ]; then
-            rate=$(grep -o 'line-rate="[0-9.]*"' "$report" | head -1 | grep -o '[0-9.]*' || true)
-            [ -n "$rate" ] && pct=$(awk "BEGIN{printf \"%.2f\", $rate * 100}")
+          # VSTest e Microsoft.Testing.Platform podem escolher diretórios diferentes,
+          # e cada projeto de teste gera seu próprio relatório Cobertura. Usar só o
+          # primeiro arquivo (head -1) tornava o gate uma loteria de ordem de arquivos:
+          # agrega TODOS os relatórios em vez disso.
+          mapfile -t reports < <(find . -type f -name '*.xml' -print0 2>/dev/null \
+            | xargs -0r grep -l '<coverage' | sort || true)
+          if [ "${#reports[@]}" -gt 0 ]; then
+            echo "Relatórios Cobertura encontrados: ${#reports[@]}"
+            printf ' - %s\n' "${reports[@]}"
+            pct=$(python3 - "${reports[@]}" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          # Mescla por união de linhas (equivale ao ReportGenerator): cada linha
+          # distinta (arquivo + número) conta uma vez; coberta se hits > 0 em
+          # qualquer relatório. Evita dupla contagem quando vários projetos de
+          # teste cobrem o mesmo código.
+          lines = {}
+          covered_attr = 0
+          valid_attr = 0
+          weighted_rate_sum = 0.0
+          weighted_rate_base = 0
+          for path in sys.argv[1:]:
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception:
+                  continue
+              try:
+                  lc = int(float(root.get("lines-covered", "") or 0))
+                  lv = int(float(root.get("lines-valid", "") or 0))
+              except ValueError:
+                  lc, lv = 0, 0
+              covered_attr += lc
+              valid_attr += lv
+              try:
+                  rate = float(root.get("line-rate", ""))
+                  if lv > 0:
+                      weighted_rate_sum += rate * lv
+                      weighted_rate_base += lv
+              except (TypeError, ValueError):
+                  pass
+              for cls in root.iter("class"):
+                  filename = cls.get("filename") or cls.get("name") or ""
+                  for line in cls.iter("line"):
+                      num = line.get("number")
+                      if num is None:
+                          continue
+                      try:
+                          hits = int(float(line.get("hits", "0") or 0))
+                      except ValueError:
+                          hits = 0
+                      key = (filename, num)
+                      lines[key] = lines.get(key, 0) or (hits > 0)
+          if lines:
+              total = len(lines)
+              covered = sum(1 for v in lines.values() if v)
+              print(f"{covered * 100.0 / total:.2f}")
+          elif valid_attr > 0:
+              print(f"{covered_attr * 100.0 / valid_attr:.2f}")
+          elif weighted_rate_base > 0:
+              print(f"{weighted_rate_sum * 100.0 / weighted_rate_base:.2f}")
+          PY
+          ) || true
           fi
 
           if [ -z "$pct" ]; then
