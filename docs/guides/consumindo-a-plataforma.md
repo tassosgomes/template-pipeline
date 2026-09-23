@@ -61,6 +61,33 @@ Mínimo absoluto, para um repositório que só quer build e testes:
 É quase sempre permissão. A mensagem do GitHub é pouco específica, e o run aparece como
 `startup_failure` com zero jobs. Confira a matriz acima antes de procurar qualquer outra causa.
 
+## SonarCloud (opt-in)
+
+```yaml
+jobs:
+  ci:
+    uses: tassosgomes/template-pipeline/.github/workflows/ci-dotnet.yml@v1
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      run-sonar: true
+      sonar-project-key: tassosgomes_code-for-coders
+      # sonar-organization default: tasssosgomes. Só informe se o projeto for de outra org.
+    secrets:
+      sonar-token: ${{ secrets.SONAR_TOKEN }}
+```
+
+- Crie o secret `SONAR_TOKEN` **no repositório do serviço** (este repositório é público e
+  não guarda segredos). Sem ele, o scan falha com mensagem explícita.
+- `security-mode: observe` (o default) só reporta: o Quality Gate vermelho **não** reprova.
+  Com `enforce`, o scan aguarda o Quality Gate (`sonar.qualitygate.wait=true`) e reprova
+  quando ele estiver vermelho.
+- No `.NET` o scanner envolve o build (`begin` antes, `end` depois); nas demais stacks o
+  scan roda no job `security`, em paralelo com o build.
+- Quem tem CI própria usa `sec-sast.yml` com os mesmos inputs (`run-sonar`,
+  `sonar-project-key`, `secrets.sonar-token`).
+
 ## Um exemplo por stack
 
 ```yaml
@@ -120,6 +147,11 @@ with: { version: '22', coverage-threshold: 70 }
 | `dast-port` | number | `8080` | |
 | `dast-health-path` | string | `/health` | |
 | `dast-openapi-spec` | string | `''` | Preenchido, troca o baseline pelo api-scan |
+| `run-sonar` | boolean | `false` | Habilita o scan do SonarCloud. Exige `secrets.sonar-token` e `sonar-project-key` |
+| `sonar-project-key` | string | `''` | Chave do projeto no SonarCloud (`sonar.projectKey`) |
+| `sonar-organization` | string | `tasssosgomes` | Chave da organização no SonarCloud |
+| `sonar-host-url` | string | `https://sonarcloud.io` | URL do SonarCloud |
+| `sonar-args` | string | `''` | Argumentos extras repassados ao scanner Sonar |
 
 ### Outputs
 

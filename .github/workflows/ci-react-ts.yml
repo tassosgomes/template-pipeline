@@ -119,6 +119,33 @@ on:
         type: string
         default: ''
 
+      # --------------------------------------------------------------- sonar
+      run-sonar:
+        description: 'Habilita o scan do SonarCloud. Exige secrets.sonar-token e sonar-project-key.'
+        type: boolean
+        default: false
+      sonar-project-key:
+        description: 'Chave do projeto no SonarCloud (sonar.projectKey).'
+        type: string
+        default: ''
+      sonar-organization:
+        description: 'Chave da organização no SonarCloud.'
+        type: string
+        default: 'tasssosgomes'
+      sonar-host-url:
+        description: 'URL do SonarCloud.'
+        type: string
+        default: 'https://sonarcloud.io'
+      sonar-args:
+        description: 'Argumentos extras repassados ao scanner Sonar.'
+        type: string
+        default: ''
+
+    secrets:
+      sonar-token:
+        description: 'Token do SonarCloud (SONAR_TOKEN). Obrigatório quando run-sonar: true.'
+        required: false
+
     outputs:
       service-name:
         description: 'Nome estável do serviço, derivado da tag ou do input.'
@@ -416,6 +443,9 @@ jobs:
       findings: ${{ steps.sast-findings.outputs.counts }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SonarCloud precisa do histórico completo para blame; sem ele, só perde atribuição.
+          fetch-depth: ${{ inputs.run-sonar && 0 || 1 }}
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -471,6 +501,19 @@ jobs:
           publish: ${{ inputs.publish-findings }}
           severity-fail-on: ${{ inputs.security-fail-on }}
           mode: ${{ inputs.security-mode }}
+
+      - if: inputs.run-sonar
+        uses: ./.platform/actions/sonar-scan
+        with:
+          stack: react-ts
+          phase: scan
+          working-directory: ${{ inputs.working-directory }}
+          project-key: ${{ inputs.sonar-project-key }}
+          organization: ${{ inputs.sonar-organization }}
+          host-url: ${{ inputs.sonar-host-url }}
+          token: ${{ secrets.sonar-token }}
+          mode: ${{ inputs.security-mode }}
+          args: ${{ inputs.sonar-args }}
 
   # ===========================================================================
   dast:

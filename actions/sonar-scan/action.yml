@@ -1,0 +1,196 @@
+name: 'SonarCloud Scan'
+description: >
+  Integração com o SonarCloud. Para .NET usa o Scanner for .NET em duas fases
+  (begin antes do build, end depois); para as demais stacks usa o
+  SonarSource/sonarqube-scan-action. Em security-mode=observe nunca reprova.
+
+inputs:
+  stack:
+    description: 'dotnet | java | go | node | react-ts | python'
+    required: true
+  phase:
+    description: 'begin (dotnet, antes do build) | end (dotnet, depois do build) | scan (demais stacks).'
+    required: false
+    default: 'scan'
+  working-directory:
+    description: 'Diretório do projeto a analisar.'
+    required: false
+    default: '.'
+  project-key:
+    description: 'Chave do projeto no SonarCloud (sonar.projectKey).'
+    required: true
+  organization:
+    description: 'Chave da organização no SonarCloud (sonar.organization).'
+    required: false
+    default: 'tasssosgomes'
+  host-url:
+    description: 'URL do SonarCloud. Troque se migrar para SonarQube Server.'
+    required: false
+    default: 'https://sonarcloud.io'
+  token:
+    description: 'Token do SonarCloud (SONAR_TOKEN do repositório consumidor).'
+    required: true
+  mode:
+    description: 'observe (nunca reprova, só reporta) | enforce (reprova no Quality Gate vermelho).'
+    required: false
+    default: 'observe'
+  args:
+    description: 'Argumentos extras repassados ao scanner (-Dsonar.* ou /d:sonar.*).'
+    required: false
+    default: ''
+  java-version:
+    description: 'JDK usado pelo Scanner for .NET.'
+    required: false
+    default: '21'
+
+outputs:
+  gate:
+    description: 'Resultado do Quality Gate: passed | failed | skipped | observe.'
+    value: ${{ steps.gate.outputs.gate }}
+
+runs:
+  using: composite
+  steps:
+    # ------------------------------------------------------- validação de inputs
+    - id: validate
+      shell: bash
+      env:
+        PROJECT_KEY: ${{ inputs.project-key }}
+        TOKEN: ${{ inputs.token }}
+        PHASE: ${{ inputs.phase }}
+        STACK: ${{ inputs.stack }}
+      run: |
+        set -euo pipefail
+        if [ -z "$PROJECT_KEY" ]; then
+          echo "::error title=SonarCloud sem project-key::Informe sonar-project-key quando run-sonar: true."
+          exit 1
+        fi
+        if [ -z "$TOKEN" ]; then
+          echo "::error title=SonarCloud sem token::Crie o secret SONAR_TOKEN no repositório do serviço e repasse via secrets: sonar-token."
+          exit 1
+        fi
+        case "$PHASE" in
+          begin|end|scan) ;;
+          *)
+            echo "::error title=Fase Sonar inválida::phase='$PHASE' precisa ser begin, end ou scan."
+            exit 1
+            ;;
+        esac
+        if [ "$PHASE" = "scan" ] && [ "$STACK" = "dotnet" ]; then
+          echo "::warning title=SonarCloud sem build instrumentado::No ci-dotnet.yml o scan usa begin/end ao redor do build. Aqui (sec-sast.yml isolado) o scan genérico roda sem instrumentação: funciona, mas a análise de C# fica menos precisa."
+        fi
+        if [ "$PHASE" != "scan" ] && [ "$STACK" != "dotnet" ]; then
+          echo "::error title=Fase Sonar inválida::phase begin/end só existe para dotnet."
+          exit 1
+        fi
+
+    # --------------------------------------------- JDK para o Scanner for .NET
+    - if: inputs.stack == 'dotnet'
+      uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+
+    # ------------------------------------------------------- cache do scanner
+    - if: inputs.stack == 'dotnet'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.sonar/cache
+        key: sonar-${{ runner.os }}-dotnet
+        restore-keys: |
+          sonar-${{ runner.os }}-
+
+    # ------------------------------------------------------- dotnet: begin
+    - id: begin
+      if: inputs.phase == 'begin'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        PROJECT_KEY: ${{ inputs.project-key }}
+        ORGANIZATION: ${{ inputs.organization }}
+        HOST_URL: ${{ inputs.host-url }}
+        MODE: ${{ inputs.mode }}
+        EXTRA_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        mkdir -p "${RUNNER_TEMP}/sonar-scanner"
+        dotnet tool update dotnet-sonarscanner --tool-path "${RUNNER_TEMP}/sonar-scanner"
+
+        if [ "$MODE" = "enforce" ]; then
+          qg_wait="true"
+        else
+          qg_wait="false"
+        fi
+
+        # shellcheck disable=SC2086
+        "${RUNNER_TEMP}/sonar-scanner/dotnet-sonarscanner" begin \
+          /k:"$PROJECT_KEY" \
+          /o:"$ORGANIZATION" \
+          /d:sonar.host.url="$HOST_URL" \
+          /d:sonar.token="$SONAR_TOKEN" \
+          /d:sonar.qualitygate.wait="$qg_wait" \
+          $EXTRA_ARGS
+
+    # ------------------------------------------------------- dotnet: end
+    - id: end
+      if: inputs.phase == 'end'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        set +e
+        "${RUNNER_TEMP}/sonar-scanner/dotnet-sonarscanner" end /d:sonar.token="$SONAR_TOKEN"
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ] && [ "$MODE" = "observe" ]; then
+          echo "::warning title=SonarCloud (modo observação)::Scanner retornou $rc, mas o build NÃO foi reprovado porque security-mode=observe."
+          exit 0
+        fi
+        exit "$rc"
+
+    # ------------------------------------------------------- demais stacks: scan
+    - id: scan
+      if: inputs.phase == 'scan'
+      uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995 # v8.1.0
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+      with:
+        projectBaseDir: ${{ inputs.working-directory }}
+        args: >
+          -Dsonar.projectKey=${{ inputs.project-key }}
+          -Dsonar.organization=${{ inputs.organization }}
+          -Dsonar.host.url=${{ inputs.host-url }}
+          ${{ inputs.mode == 'enforce' && '-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300' || '' }}
+          ${{ inputs.args }}
+
+    # ------------------------------------------------------- gate / resumo
+    - id: gate
+      if: always()
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        BEGIN_OUTCOME: ${{ steps.begin.outcome }}
+        END_OUTCOME: ${{ steps.end.outcome }}
+        SCAN_OUTCOME: ${{ steps.scan.outcome }}
+      run: |
+        set -euo pipefail
+        outcome="$SCAN_OUTCOME"
+        [ -n "$END_OUTCOME" ] && outcome="$END_OUTCOME"
+        [ -n "$BEGIN_OUTCOME" ] && [ -z "$SCAN_OUTCOME" ] && [ -z "$END_OUTCOME" ] && outcome="$BEGIN_OUTCOME"
+
+        if [ "$MODE" = "observe" ]; then
+          echo "gate=observe" >> "$GITHUB_OUTPUT"
+          echo "::notice title=SonarCloud::Análise enviada em modo observação (outcome=$outcome). O Quality Gate não reprova o build."
+        elif [ "$outcome" = "success" ]; then
+          echo "gate=passed" >> "$GITHUB_OUTPUT"
+          echo "::notice title=SonarCloud::Quality Gate passou."
+        elif [ "$outcome" = "skipped" ]; then
+          echo "gate=skipped" >> "$GITHUB_OUTPUT"
+        else
+          echo "gate=failed" >> "$GITHUB_OUTPUT"
+          echo "::error title=SonarCloud reprovou::Quality Gate vermelho ou falha do scanner (outcome=$outcome)."
+        fi

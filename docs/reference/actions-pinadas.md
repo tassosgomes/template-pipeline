@@ -27,6 +27,7 @@ toda action de terceiro é fixada pelo SHA completo do commit, com a tag no come
 | `github/codeql-action/autobuild` | v4 | `1c5b675653bb5c22dbe9b12b556ec555138e09fd` |
 | `github/codeql-action/init` | v4 | `1c5b675653bb5c22dbe9b12b556ec555138e09fd` |
 | `github/codeql-action/upload-sarif` | v4 | `1c5b675653bb5c22dbe9b12b556ec555138e09fd` |
+| `SonarSource/sonarqube-scan-action` | v8.1.0 | `7006c4492b2e0ee0f816d36501671557c97f5995` |
 | `golangci/golangci-lint-action` | v9.3.0 | `ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a` |
 | `zaproxy/action-api-scan` | v0.10.0 | `5158fe4d9d8fcc75ea204db81317cce7f9e5453d` |
 | `zaproxy/action-baseline` | v0.15.0 | `de8ad967d3548d44ef623df22cf95c3b0baf8b25` |
@@ -41,6 +42,8 @@ toda action de terceiro é fixada pelo SHA completo do commit, com a tag no come
 | gosec | `v2.29.0` | `go install`, em `actions/sast` |
 | bandit | `1.9.4` | `pip install`, em `actions/sast` |
 | actionlint | `1.7.12` | binário do release, em `_selftest.yml` |
+| dotnet-sonarscanner | latest (`dotnet tool update`) | instalado em `$RUNNER_TEMP`, em `actions/sonar-scan` |
+| Scanner for .NET (JDK) | `21` (Temurin) | via `actions/setup-java` pinado, em `actions/sonar-scan` |
 
 ### Por que a CLI do gitleaks, e não a action
 

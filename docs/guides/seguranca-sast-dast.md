@@ -22,6 +22,7 @@ Duas consequências, que explicam todo o desenho desta camada:
 | Dependências (SCA) | Trivy | todo PR | conforme `security-mode` |
 | Imagem e IaC | Trivy | quando `build-container: true` | conforme `security-mode` |
 | SAST profundo | CodeQL | agendado (`sec-codeql-scheduled.yml`) | conforme configuração |
+| Qualidade + SAST comercial | SonarCloud (`run-sonar`) | todo PR (opt-in) | conforme `security-mode` |
 | DAST | OWASP ZAP | PR (efêmero) e pós-deploy (`sec-dast.yml`) | conforme `security-mode` |
 
 O workflow `sec-codeql.yml` é a implementação reusável; o caller
@@ -80,6 +81,22 @@ do self-test só valida que *alguma* coisa é detectada, não a sua regra espec�
 
 **Segredo vazado é a única exceção**: roda sempre em `enforce`, com corte em `low`. Não há modo
 observação para credencial no repositório — quando ela vaza, já vazou.
+
+## SonarCloud
+
+Opt-in por serviço: `run-sonar: true` + `sonar-project-key` + `secrets.sonar-token`
+(`SONAR_TOKEN` criado no repositório do serviço). Organização default `tasssosgomes`
+(SonarCloud, organização "Tasso Silva Gomes").
+
+- **Observe (default):** envia a análise, mas o Quality Gate vermelho não reprova o build.
+  É a fase atual — medir antes de bloquear.
+- **Enforce:** o scanner aguarda o Quality Gate e o job reprova quando ele está vermelho.
+- **.NET:** usa o Scanner for .NET com `begin` antes do `restore/build/test/publish` e
+  `end` depois — a instrumentação exige o build da própria pipeline, não um
+  `dotnet build` separado. JDK 21 é instalado pela plataforma para o scanner.
+- **Demais stacks:** `sonarqube-scan-action` no job `security`, em paralelo com o build.
+- O checkout usa `fetch-depth: 0` quando `run-sonar: true` (blame completo); desligado,
+  volta a `1`.
 
 ## Os controles
 
